@@ -45,8 +45,8 @@ function evaluate_weight_configuration(training_dataset, weights::NamedTuple,
   for (run_idx, inner_dict) in training_dataset
     ConvertSettings = StringToMatrixSettings(inner_dict)
     converted_dict = ConvertStringToMatrix.convert(ConvertSettings)
-    settings = PINNSettings(5, 1234, converted_dict, 500, 500, 
-                           num_supervised, N, 10, x_left, x_right, 
+    settings = PINNSettings(5, 1234, converted_dict, 500, 500,
+                           num_supervised, N, 10, x_left, x_right,
                            supervised_weight, bc_weight, pde_weight, xs)
     
     # Train the network

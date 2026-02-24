@@ -34,6 +34,8 @@ using CSV
 using DataFrames
 using JSON
 
+DEBUG = false  # Toggle verbose debug output
+
 using CUDA
 
 include("../utils/gpu_utils.jl")
@@ -160,13 +162,17 @@ end
 # Step 6: Define the Loss Function
 # ---------------------------------------------------------------------------
 
-function loss_fn(p_net, data, coeff_net, st, ode_matrix_flat, boundary_condition, settings::PINNSettings, use_gpu::Bool=false)
-  # Transfer constants to correct device — off the gradient tape since these don't depend on p_net
-  ode_flat_dev, bc_dev, data_dev, xs_dev = Zygote.ignore() do
-    (GPUUtils.to_device(ode_matrix_flat; gpu=use_gpu),
-     GPUUtils.to_device(boundary_condition; gpu=use_gpu),
-     GPUUtils.to_device(data; gpu=use_gpu),
-     GPUUtils.to_device(collect(settings.xs); gpu=use_gpu))
+function loss_fn(p_net, data, coeff_net, st, ode_matrix_flat, boundary_condition, settings::PINNSettings, use_gpu::Bool=false; ode_buffers::Union{ODEBuffers, Nothing}=nothing)
+  # Use pre-computed device arrays when available; otherwise transfer on each call (CPU fallback)
+  ode_flat_dev, bc_dev, data_dev, xs_dev = if ode_buffers !== nothing
+    (ode_buffers.ode_flat_dev, ode_buffers.bc_dev, ode_buffers.data_dev, ode_buffers.xs_dev)
+  else
+    Zygote.ignore() do
+      (GPUUtils.to_device(ode_matrix_flat; gpu=use_gpu),
+       GPUUtils.to_device(boundary_condition; gpu=use_gpu),
+       GPUUtils.to_device(data; gpu=use_gpu),
+       GPUUtils.to_device(collect(settings.xs); gpu=use_gpu))
+    end
   end
 
   # Run the network to get coefficients (output is on same device as p_net)
@@ -185,13 +191,13 @@ function loss_fn(p_net, data, coeff_net, st, ode_matrix_flat, boundary_condition
   )
 
   # Calculate the PDE loss (residual of the ODE)
-  loss_pde = generate_loss_pde_value(loss_func_settings)
+  loss_pde = generate_loss_pde_value(loss_func_settings; ode_buffers=ode_buffers)
 
   # Calculate the loss from the boundary conditions
-  loss_bc = generate_loss_bc_value(loss_func_settings)
+  loss_bc = generate_loss_bc_value(loss_func_settings; ode_buffers=ode_buffers)
 
   # Calculate supervised loss using the plugboard coefficients
-  loss_supervised = generate_loss_supervised_value(loss_func_settings)
+  loss_supervised = generate_loss_supervised_value(loss_func_settings; ode_buffers=ode_buffers)
 
   # The total loss is a weighted sum of the components
   return loss_pde * settings.pde_weight + settings.bc_weight * loss_bc + settings.supervised_weight * loss_supervised, loss_bc, loss_pde, loss_supervised
@@ -201,49 +207,36 @@ end
 # Step 7: Global Loss Function
 # ---------------------------------------------------------------------------
 
-function global_loss(p_net, settings::PINNSettings, coeff_net, st, use_gpu::Bool=false)
+function global_loss(p_net, settings::PINNSettings, coeff_net, st, use_gpu::Bool=false; all_ode_buffers::Union{Dict, Nothing}=nothing)
   total_loss = F(0.0)
   total_local_loss_bc = F(0.0)
   total_local_loss_pde = F(0.0)
   total_local_loss_supervised = F(0.0)
   num_of_training_examples = length(settings.ode_matrices)
 
-  # println(settings.ode_matrices) # print out the ode_matrices dictionary
-  # println("The global loss is globally lossing...")
   for (alpha_matrix_key, series_coeffs) in settings.ode_matrices
-    # println("The current  ODE I am calculating the loss for right now: ", alpha_matrix_key)
-    # println("The local loss is locally lossing...")
-    # alpha_matrix = eval(Meta.parse(alpha_matrix_key)) # convert from string to matrix 
-    matrix_flat = vec(alpha_matrix_key)  # Flatten to a column vector
-    boundary_condition = [series_coeffs[1], series_coeffs[2]]  # copy this
-    local_loss, local_loss_bc, local_loss_pde, local_loss_supervised = loss_fn(p_net, series_coeffs, coeff_net, st, matrix_flat, boundary_condition, settings, use_gpu) # calculate the local loss
-    # println(local_loss)
-    total_loss += local_loss # add up the local loss to find the global loss
+    matrix_flat = vec(alpha_matrix_key)
+    boundary_condition = [series_coeffs[1], series_coeffs[2]]
+    # Look up pre-computed buffers for this ODE (nothing if not available)
+    buffers = all_ode_buffers !== nothing ? get(all_ode_buffers, alpha_matrix_key, nothing) : nothing
+    local_loss, local_loss_bc, local_loss_pde, local_loss_supervised = loss_fn(p_net, series_coeffs, coeff_net, st, matrix_flat, boundary_condition, settings, use_gpu; ode_buffers=buffers)
+    total_loss += local_loss
     total_local_loss_bc += local_loss_bc
     total_local_loss_pde += local_loss_pde
     total_local_loss_supervised += local_loss_supervised
   end
 
   normalized_loss = total_loss / num_of_training_examples
-  normalized_loss_bc = total_local_loss_bc / num_of_training_examples
-  normalized_loss_pde = total_local_loss_pde / num_of_training_examples
-  normalized_loss_supervised = total_local_loss_supervised / num_of_training_examples
 
-  # Zygote.ignore() do
-  #   buffer_loss_values(  # ← Changed from create_csv_file_for_loss
-  #     total_loss=normalized_loss,
-  #     total_loss_bc=normalized_loss_bc,
-  #     total_loss_pde=normalized_loss_pde,
-  #     total_loss_supervised=normalized_loss_supervised
-  #   )
-  # end
-
-  losses = (
-        bc = total_local_loss_bc / num_of_training_examples,
-        pde = total_local_loss_pde / num_of_training_examples,
-        sup = total_local_loss_supervised / num_of_training_examples
+  # Breakdown is for logging only — keep it off the AD tape
+  losses = Zygote.ignore() do
+    (
+      bc  = Float32(total_local_loss_bc / num_of_training_examples),
+      pde = Float32(total_local_loss_pde / num_of_training_examples),
+      sup = Float32(total_local_loss_supervised / num_of_training_examples)
     )
-  # println(total_loss)
+  end
+
   return normalized_loss, losses
 end
 
@@ -255,42 +248,76 @@ end
 We train the PINN on the training dataset and return the network
 =#
 
-function train_pinn(settings::PINNSettings, output_dir; milestone_interval::Int=0, on_milestone::Union{Function,Nothing}=nothing)
-  run_id = generate_run_id(settings.optimizer)
+function train_pinn(settings::PINNSettings, output_dir; run_id::String=generate_run_id(settings.optimizer), milestone_interval::Int=0, on_milestone::Union{Function,Nothing}=nothing, progress_callback::Union{Function,Nothing}=nothing, write_loss_csv::Bool=true, snapshot_path::Union{String,Nothing}=nothing)
   csv_file = joinpath(output_dir, "loss.csv")
 
   use_gpu = GPUUtils.is_gpu_available()
 
-  if use_gpu
-    @info "Training on GPU: $(GPUUtils.get_device())"
-  else
-    @info "Training on CPU"
+  # Only log device info when using own progress bar (not in grid search)
+  if progress_callback === nothing
+    if use_gpu
+      @info "Training on GPU: $(GPUUtils.get_device())"
+    else
+      @info "Training on CPU"
+    end
   end
 
   coeff_net, p_init_ca, st = initialize_network(settings; use_gpu=use_gpu)
 
-  history = []
-  latest_metrics = Ref((0.0f0, 0.0f0, 0.0f0))
+  # Warm-start from snapshot if provided
+  if snapshot_path !== nothing
+    raw = reinterpret(Float32, read(snapshot_path))
+    p_init_ca = ComponentArray(raw, getaxes(p_init_ca))
+    if use_gpu
+      p_init_ca = CUDA.cu(p_init_ca)
+    end
+    @info "Loaded weights from snapshot: $snapshot_path"
+  end
 
-  # Create wrapper function for optimization
+  # Pre-compute all constant ODE data on the target device (GPU or CPU) once
+  to_device_fn = x -> GPUUtils.to_device(x; gpu=use_gpu)
+  all_ode_buffers = precompute_buffers(settings, use_gpu, to_device_fn)
+  @info "Pre-computed ODE buffers for $(length(all_ode_buffers)) training examples (device: $(use_gpu ? "GPU" : "CPU"))"
+
+  # How often to record metrics and update the progress bar (every N iterations)
+  LOG_INTERVAL = 100
+
+  # Pre-allocate history buffer: columns = [total, bc, pde, supervised], rows = sampled iterations
+  max_logged = cld(settings.maxiters_lbfgs, LOG_INTERVAL) + 1  # ceiling division + 1 for safety
+  history_buf = Matrix{Float32}(undef, max_logged, 4)
+  history_iters = Vector{Int}(undef, max_logged)
+  history_len = Ref(0)
+
+  latest_metrics = Ref((0.0f0, 0.0f0, 0.0f0))
+  latest_params = Ref{Any}(p_init_ca)  # track latest params for graceful interrupt
+  iter_count = Ref(0)
+
+  # Create wrapper function for optimization — captures pre-computed buffers
   function loss_wrapper(p_net, _)
-    loss, losses = global_loss(p_net, settings, coeff_net, st, use_gpu)
+    loss, losses = global_loss(p_net, settings, coeff_net, st, use_gpu; all_ode_buffers=all_ode_buffers)
     latest_metrics[] = (losses.bc, losses.pde, losses.sup)
     return loss
   end
 
   function custom_callback(state, l; progress_bar)
-    bc, pde, sup = latest_metrics[]
-    push!(history, (
-        total = l,
-        bc = bc,
-        pde = pde,
-        supervised = sup
-    ))
-    progress_bar(state, l)
+    iter_count[] += 1
+    iteration = iter_count[]
+    latest_params[] = state.u
+
+    # Only record metrics + update progress bar every LOG_INTERVAL iterations
+    if iteration % LOG_INTERVAL == 0 || iteration == 1
+      bc, pde, sup = latest_metrics[]
+      idx = history_len[] + 1
+      history_len[] = idx
+      history_iters[idx] = iteration
+      history_buf[idx, 1] = Float32(l)
+      history_buf[idx, 2] = Float32(bc)
+      history_buf[idx, 3] = Float32(pde)
+      history_buf[idx, 4] = Float32(sup)
+      progress_bar(state, l)
+    end
 
     # Check if we've hit a milestone
-    iteration = length(history)
     if on_milestone !== nothing && milestone_interval > 0 && iteration % milestone_interval == 0
       p_current = use_gpu ? ComponentArray(Array(getdata(state.u)), getaxes(state.u)) : state.u
       on_milestone(p_current, iteration, coeff_net, st, run_id)
@@ -304,16 +331,33 @@ function train_pinn(settings::PINNSettings, output_dir; milestone_interval::Int=
   prob = OptimizationProblem(optfun, p_init_ca)
 
   # ---------------- Adam ----------------
-  @info "Starting Adam optimization..."
-  p_bar = ProgressBar.ProgressBarSettings(settings.maxiters_lbfgs, "Adam...")
-  callback_bar = ProgressBar.Bar(p_bar)
+  if progress_callback !== nothing
+    # External callback provided (e.g. shared grid search progress bar)
+    callback_bar = progress_callback
+  else
+    # Default: create own progress bar (single run / scaling adam)
+    @info "Starting Adam optimization..."
+    p_bar = ProgressBar.ProgressBarSettings(settings.maxiters_lbfgs, "Adam...")
+    callback_bar = ProgressBar.Bar(p_bar; step_size=LOG_INTERVAL)
+  end
 
   adam_opt = OptimizationOptimisers.Adam(0.001f0)
 
-  res = solve(prob,
-    adam_opt;
-    callback = (state, l) -> custom_callback(state, l; progress_bar=callback_bar),
-    maxiters=settings.maxiters_lbfgs)
+  interrupted = false
+  res = try
+    solve(prob,
+      adam_opt;
+      callback = (state, l) -> custom_callback(state, l; progress_bar=callback_bar),
+      maxiters=settings.maxiters_lbfgs)
+  catch e
+    if e isa InterruptException
+      interrupted = true
+      @warn "Training interrupted at iteration $(iter_count[]). Saving progress..."
+      (u = latest_params[],)  # mock result with latest params
+    else
+      rethrow(e)
+    end
+  end
 
   #=
   # ---------------- LBFGS (disabled) ----------------
@@ -332,18 +376,33 @@ function train_pinn(settings::PINNSettings, output_dir; milestone_interval::Int=
   # Extract final trained parameters — transfer back to CPU for evaluation/plotting
   p_trained = use_gpu ? ComponentArray(Array(getdata(res.u)), getaxes(res.u)) : res.u
 
-  @info "Training complete."
+  n = history_len[]
+  if interrupted
+    @info "Partial training saved — $(iter_count[]) iterations completed ($n logged samples)."
+  else
+    @info "Training complete — $(iter_count[]) iterations ($n logged samples)."
+  end
 
-  df = DataFrame(
-    iteration = 1:length(history),
-    total = [e.total for e in history],
-    bc = [e.bc for e in history],
-    pde = [e.pde for e in history],
-    supervised = [e.supervised for e in history]
-  )
-  CSV.write(csv_file, df)
+  # Build history from pre-allocated buffer (only the filled portion)
+  history = [(
+    total = history_buf[i, 1],
+    bc    = history_buf[i, 2],
+    pde   = history_buf[i, 3],
+    supervised = history_buf[i, 4]
+  ) for i in 1:n]
 
-  return p_trained, coeff_net, st, run_id
+  if write_loss_csv && n > 0
+    df = DataFrame(
+      iteration  = history_iters[1:n],
+      total      = history_buf[1:n, 1],
+      bc         = history_buf[1:n, 2],
+      pde        = history_buf[1:n, 3],
+      supervised = history_buf[1:n, 4]
+    )
+    CSV.write(csv_file, df)
+  end
+
+  return p_trained, coeff_net, st, run_id, history
 end
 
 # ---------------------------------------------------------------------------
@@ -354,12 +413,13 @@ end
 # analytic_sol_func(x) = (pi * x * (-x + (pi^2) * (2x - 3) + 1) - sin(pi * x)) / (pi^3) # We replace with our training examples
 # This is then represented as a TaylorSeries 
 
-function evaluate_solution(settings::PINNSettings, p_trained, coeff_net, st, benchmark_dataset, output_dir, run_id; iteration::Int=0)
+function evaluate_solution(settings::PINNSettings, p_trained, coeff_net, st, benchmark_dataset, output_dir, run_id; iteration::Int=0, write_results_json::Bool=true)
   converted_benchmark_dataset = convert_plugboard_keys(benchmark_dataset)
   fact = factorial.(big.(0:settings.n_terms_for_power_series))
 
   # We will update the error. For now we are only going to do ONE test set.
   loss = F(0.0)
+  all_results = Dict[]
 
   for (alpha_matrix_key, benchmark_series_coeffs) in converted_benchmark_dataset
     matrix_flat = Float32.(vec(alpha_matrix_key))  # Flatten to Float32 column vector
@@ -378,14 +438,19 @@ function evaluate_solution(settings::PINNSettings, p_trained, coeff_net, st, ben
       "function_error" => Float64(loss),
       "iteration" => iteration
     )
+    push!(all_results, results)
 
-    results_file = joinpath(output_dir, "results.json")
-    entry_id = generate_run_id(settings.optimizer)
-    append_to_results_json(results_file, entry_id, results)
+    if write_results_json
+      results_file = joinpath(output_dir, "results.json")
+      entry_id = generate_run_id(settings.optimizer)
+      append_to_results_json(results_file, entry_id, results)
 
-    @info "Results written to $results_file (run: $run_id)"
-    @info "PINN's guess for coefficients: $a_learned"
-    @info "The REAL coefficients: $benchmark_series_coeffs"
+      @info "Results written to $results_file (run: $run_id)"
+    end
+    if DEBUG
+      @info "PINN's guess for coefficients: $a_learned"
+      @info "The REAL coefficients: $benchmark_series_coeffs"
+    end
   end
 
   ### ========================================================================
@@ -477,7 +542,7 @@ function evaluate_solution(settings::PINNSettings, p_trained, coeff_net, st, ben
   end
   =#
 
-  return loss
+  return loss, all_results
 end
 
 # ---------------------------------------------------------------------------

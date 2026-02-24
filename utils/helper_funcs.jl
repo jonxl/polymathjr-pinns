@@ -2,6 +2,7 @@ module helper_funcs
 
 using CSV
 using DataFrames
+using Dates
 using Plots
 using Random
 using JSON
@@ -113,10 +114,11 @@ end
 
 
 """
-Generate a unique run ID like "adam-a7x9k2m1"
+Generate a unique run ID like "adam-02-23-26"
 """
 function generate_run_id(optimizer::String)::String
-  return "$(optimizer)-$(randstring(8))"
+  timestamp = Dates.format(now(), "mm-dd-yy")
+  return "$(optimizer)-$(timestamp)"
 end
 
 """

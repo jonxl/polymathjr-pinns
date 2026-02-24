@@ -22,6 +22,39 @@ using .PINN
 include("../utils/training_schemes.jl")
 using .training_schemes
 
+# Dataset file paths
+training_data_dir = "./data/training_dataset.json"
+benchmark_data_dir = "./data/benchmark_dataset.json"
+
+# =========================================================================
+# Configuration: Data Generation
+# =========================================================================
+# Controls whether and how training/benchmark datasets are created.
+
+GENERATE_DATASET = true   # true = regenerate datasets via plugboard, false = use existing JSON files
+MODE = "RANDOM"          # "SPECIFIC" = hardcoded test_matrix, "RANDOM" = random ODE matrices
+# =========================================================================
+# Configuration: Training Mode
+# =========================================================================
+# Controls which training strategy to run. Set ONE of these to true.
+#   SINGLE_RUN   — Train one PINN with fixed hyperparameters
+#   GRID_SEARCH  — Threaded 2D grid search over loss weights (pde x supervised)
+#   SCALING_ADAM — Iterate over training dataset with milestone evaluation
+
+TRAINING_MODE = "SCALING_ADAM"  # "SINGLE_RUN", "GRID_SEARCH", or "SCALING_ADAM"
+
+# =========================================================================
+# Configuration: Snapshots
+# =========================================================================
+# Saving: periodically write model weights to results/run-{id}/snapshots/
+# Loading: warm-start training from a previously saved snapshot
+
+SAVE_SNAPSHOTS = true   # true = save weight snapshots during training, false = skip
+SNAPSHOT_INTERVAL = 100  # save a snapshot every N iterations (only when SAVE_SNAPSHOTS = true)
+
+LOAD_SNAPSHOT = false   # true = warm-start from snapshot, false = train from scratch
+SNAPSHOT_PATH = ""      # path to .bin snapshot file, e.g. "results/run-adam-a8Kf3x2Q/snapshots/iter-0100000.bin"
+
 #=
 This function does the following:
 Create training run directories
@@ -69,13 +102,6 @@ function create_training_run_dirs(run_number::Int64, batch_size::Any)
   return training_run_dir, output_file
 end
 
-# ---- Configuration ----
-GENERATE_DATASET = true  # Set to false to skip dataset generation and use existing data
-MODE = "SPECIFIC"         # "SPECIFIC" = benchmark on hardcoded test_matrix, "RANDOM" = random benchmark
-
-# These are the training and benchmark directories
-training_data_dir = "./data/training_dataset.json"
-benchmark_data_dir = "./data/benchmark_dataset.json"
 
 #=
 This function initializes training run batches
@@ -89,27 +115,31 @@ function init_batches(batch_sizes::Array{Int})
       batch_sizes: Array of integers representing different batch sizes
   """
 
-  benchmark_dataset_setting::Settings = Plugboard.Settings(2, 0, 1, benchmark_data_dir, 10)
+  benchmark_dataset_setting::Settings = Plugboard.Settings(1, 0, 1, benchmark_data_dir, 10)
 
   # generate training datasets and benchmarks 
   for (batch_index, k) in enumerate(batch_sizes)
-    training_dataset_setting::Settings = Plugboard.Settings(2, 0, k, training_data_dir, 10)
+    training_dataset_setting::Settings = Plugboard.Settings(1, 0, k, training_data_dir, 10)
     # set up plugboard for solutions to ay' + by = 0 where a,b != 0
     run_number_formatted = lpad(batch_index, 2, '0')
 
     @info "Generating datasets for batch $run_number_formatted" num_examples=k mode=MODE
 
     # Training data depends on MODE
-    specific_matrix = [1; 6; 2;;]
+    specific_training_matrix = [-1; 1;;]
     if MODE == "SPECIFIC"
       @warn "In $MODE mode. Generating specific training dataset for $specific_matrix"
-      Plugboard.generate_specific_ode_dataset(training_dataset_setting, batch_index, specific_matrix)
+      Plugboard.generate_specific_ode_dataset(training_dataset_setting, batch_index, specific_training_matrix)
     elseif MODE == "RANDOM"
       Plugboard.generate_random_ode_dataset(training_dataset_setting, batch_index)
     end
 
+    # specific_benchmark_matrix = [1; 1;;]
+
+    Plugboard.generate_random_ode_dataset(benchmark_dataset_setting, 1)
+
     # Benchmark always uses the specific test matrix for consistent evaluation
-    Plugboard.generate_specific_ode_dataset(benchmark_dataset_setting, 1, specific_matrix)
+    # Plugboard.generate_specific_ode_dataset(benchmark_dataset_setting, 1, specific_benchmark_matrix)
   end
 end
 
@@ -137,22 +167,6 @@ function run_training_sequence(batch_sizes::Array{Int})
   # We will approximate the solution u(x) with a truncated power series of degree N.
   # BS on pde_weight with supervised and bc fixed at 1.0
 
-  #=
-  binary_search_weights(
-    training_dataset,
-    :pde,
-    (0, 100),
-    20,
-    fixed_weights = (supervised=supervised_weight, bc=bc_weight),
-    num_supervised = num_supervised,
-    N = N,
-    x_left = x_left,
-    x_right = x_right,
-    xs = xs,
-    base_data_dir = "data"
-  )
-  =#
-
   N = 10 # The degree of the highest power term in the series.
 
   num_supervised = 10 # The number of coefficients we will supervise during training.
@@ -163,77 +177,78 @@ function run_training_sequence(batch_sizes::Array{Int})
   x_left = F(0.0)  # Left boundary of the domain
   x_right = F(1.0) # Right boundary of the domain
 
-  # Define a weight for the boundary condition, surpivesed coefficients, and the pde
-  supervised_weight = F(1.0)  # Weight for the supervised loss term in the total loss function.
-  bc_weight = F(1.0)# for now we are going to test the two of these to zero
+  # Define a weight for the boundary condition, supervised coefficients, and the pde
+  supervised_weight = F(1.0)
+  bc_weight = F(1.0)
   pde_weight = F(1.0)
 
   xs = range(x_left, x_right, length=num_points)
 
-  # Output directory for results
-  output_dir = "results"
-  mkpath(output_dir)
+  # Ensure parent results directory exists
+  mkpath("results")
 
-  #=
-  # Single run with one dataset and fixed iteration count
-  for (run_idx, inner_dict) in training_dataset
-    converted_dict = convert_plugboard_keys(inner_dict)
+  # ---- Run selected training mode ----
+  if TRAINING_MODE == "SINGLE_RUN"
+    # Train one PINN with fixed hyperparameters
+    for (run_idx, inner_dict) in training_dataset
+      converted_dict = convert_plugboard_keys(inner_dict)
 
-    float_converted_dict = Dict{Matrix{Float32}, Any}()
-    for (mat, series) in converted_dict
-      float_converted_dict[Float32.(mat)] = series
+      float_converted_dict = Dict{Any, Any}()
+      for (mat, series) in converted_dict
+        float_converted_dict[Float32.(mat)] = series
+      end
+
+      settings = PINNSettings(10, 1234, float_converted_dict, 1000, N, num_supervised, num_points, x_left, x_right, supervised_weight, bc_weight, pde_weight, xs, "adam")
+
+      run_id = generate_run_id(settings.optimizer)
+      output_dir = joinpath("results", "run-$run_id")
+      mkpath(output_dir)
+
+      snap = LOAD_SNAPSHOT ? SNAPSHOT_PATH : nothing
+      p_trained, coeff_net, st, _, _ = train_pinn(settings, output_dir; run_id=run_id, snapshot_path=snap)
+      function_error, _ = evaluate_solution(settings, p_trained, coeff_net, st, benchmark_dataset["01"], output_dir, run_id)
+      @info "Function error: $function_error"
     end
 
-    settings = PINNSettings(10, 1234, float_converted_dict, 100, num_supervised, N, 10, x_left, x_right, supervised_weight, bc_weight, pde_weight, xs, "adam")
+  elseif TRAINING_MODE == "GRID_SEARCH"
+    # Threaded 2D grid search over pde_weight x supervised_weight
+    # Launch with: julia --project -t auto src/main.jl
+    neuron_count = 20
+    run_id = generate_run_id("grid")
+    output_dir = joinpath("results", "run-$run_id")
+    mkpath(output_dir)
 
-    # Train the network
-    p_trained, coeff_net, st, run_id = train_pinn(settings, output_dir)
-    function_error = evaluate_solution(settings, p_trained, coeff_net, st, benchmark_dataset["01"], output_dir, run_id)
-    @info "Function error: $function_error"
-  end
-  =#
-
-  #=
-  # Scaling runs (disabled)
-  #=
     result = grid_search_2d(
+      neuron_count,
       training_dataset,
       benchmark_dataset,
-      :pde, (0.1, 1.0),  # supervised weight range
-      :supervised, (0.1, 1.0),           # bc weight range
-      10,                          # 10x10 grid = 100 evaluations
+      :pde, (0.1, 1.0),
+      :supervised, (0.1, 1.0),
+      2;
       fixed_weights=(bc=1.0,),
-      num_supervised=21,
-      N=21,
-      x_left=0.0f0,
-      x_right=1.0f0,
-      xs=xs
+      num_supervised=num_supervised,
+      N=N,
+      x_left=x_left,
+      x_right=x_right,
+      xs=xs,
+      base_data_dir=output_dir
     )
-  =#
+    @info "Grid search complete" best_objective=result.best_objective best_weights=result.best_weights
 
-  #=
-  scaling_neurons_settings = TrainingSchemesSettings(training_dataset, benchmark_dataset, N, num_supervised, num_points, x_left, x_right, supervised_weight, bc_weight, pde_weight, xs)
-  neurons_counts = Dict(
-    "ten_neurons" => 10,
-    "fifty_neurons" => 50,
-    "hundred_neurons" => 100
-  )
+  elseif TRAINING_MODE == "SCALING_ADAM"
+    # Iterate over training dataset with milestone callbacks
+    maxiters = 1000
+    milestone_interval = SAVE_SNAPSHOTS ? SNAPSHOT_INTERVAL : 0
 
-  # grid_search_at_scale(scaling_neurons_settings, neurons_counts)
-  # println(result)
+    scaling_adam_settings = TrainingSchemesSettings(training_dataset, benchmark_dataset, N, num_supervised, num_points, x_left, x_right, supervised_weight, bc_weight, pde_weight, xs)
+    snap = LOAD_SNAPSHOT ? SNAPSHOT_PATH : nothing
+    scaling_adam(scaling_adam_settings, maxiters, milestone_interval; snapshot_path=snap)
 
-  # this increase the neuron count in an iterative process
-  scaling_neurons(scaling_neurons_settings, neurons_counts)
-  =#
-  =#
-
-  maxiters = 100000
-  milestone_interval = 100
-
-  scaling_adam_settings = TrainingSchemesSettings(training_dataset, benchmark_dataset, N, num_supervised, num_points, x_left, x_right, supervised_weight, bc_weight, pde_weight, xs)
-  scaling_adam(scaling_adam_settings, maxiters, milestone_interval)
+  else
+    error("Unknown TRAINING_MODE: $TRAINING_MODE. Use \"SINGLE_RUN\", \"GRID_SEARCH\", or \"SCALING_ADAM\".")
+  end
 end
 
-batch = [10]
+batch = [1000]
 
 run_training_sequence(batch)
