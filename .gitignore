@@ -26,6 +26,8 @@ deps/build.log
 # Beads
 .beads/
 
+results/
+
 # OS
 .DS_Store
 Thumbs.db
