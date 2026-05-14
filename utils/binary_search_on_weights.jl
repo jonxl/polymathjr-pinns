@@ -6,7 +6,7 @@ using JSON
 include("../utils/helper_funcs.jl")
 using .helper_funcs
 
-include("../modelcode/PINN.jl")
+include("../architectures/PINN.jl")
 using .PINN
 
 """

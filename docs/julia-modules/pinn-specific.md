@@ -2,7 +2,7 @@
 
 Specialized solver for first-order ODEs of the form `ay' + by = 0`.
 
-**Location:** `modelcode/PINN_specific.jl`
+**Location:** `architectures/PINN_specific.jl`
 
 ---
 

@@ -50,6 +50,9 @@ using .loss_functions
 include("../utils/helper_funcs.jl")
 using .helper_funcs
 
+include("../utils/safetensors_utils.jl")
+using .SafeTensorSnapshots
+
 # Ensure a "data" directory exists for saving plots.
 isdir("data") || mkpath("data")
 
@@ -163,11 +166,11 @@ end
 # ---------------------------------------------------------------------------
 
 function loss_fn(p_net, data, coeff_net, st, ode_matrix_flat, boundary_condition, settings::PINNSettings, use_gpu::Bool=false; ode_buffers::Union{ODEBuffers, Nothing}=nothing)
-  # Use pre-computed device arrays when available; otherwise transfer on each call (CPU fallback)
-  ode_flat_dev, bc_dev, data_dev, xs_dev = if ode_buffers !== nothing
-    (ode_buffers.ode_flat_dev, ode_buffers.bc_dev, ode_buffers.data_dev, ode_buffers.xs_dev)
-  else
-    Zygote.ignore() do
+  # Constants w.r.t. p_net — keep off AD tape whether pre-computed or transferred on the fly
+  ode_flat_dev, bc_dev, data_dev, xs_dev = Zygote.ignore() do
+    if ode_buffers !== nothing
+      (ode_buffers.ode_flat_dev, ode_buffers.bc_dev, ode_buffers.data_dev, ode_buffers.xs_dev)
+    else
       (GPUUtils.to_device(ode_matrix_flat; gpu=use_gpu),
        GPUUtils.to_device(boundary_condition; gpu=use_gpu),
        GPUUtils.to_device(data; gpu=use_gpu),
@@ -204,21 +207,70 @@ function loss_fn(p_net, data, coeff_net, st, ode_matrix_flat, boundary_condition
 end
 
 # ---------------------------------------------------------------------------
+# Step 6b: Epoch Batch Iterator (Mini-Batching)
+# ---------------------------------------------------------------------------
+
+mutable struct EpochBatchIterator
+  all_items::Vector{Pair}    # all (matrix_key => series_coeffs) pairs
+  order::Vector{Int}         # shuffled indices for current epoch
+  pos::Int                   # current position in the epoch
+  batch_size::Int            # ODEs per bin (0 = full batch)
+  epoch_count::Int           # how many complete epochs have finished
+  epoch_just_completed::Bool # true on the first call after an epoch wraps
+end
+
+function EpochBatchIterator(ode_matrices::Dict, batch_size::Int)
+  items = collect(ode_matrices)
+  order = batch_size > 0 ? Random.randperm(length(items)) : collect(1:length(items))
+  EpochBatchIterator(items, order, 1, batch_size, 0, false)
+end
+
+function next_batch!(iter::EpochBatchIterator)
+  iter.epoch_just_completed = false
+  n = length(iter.all_items)
+  if iter.batch_size <= 0 || iter.batch_size >= n
+    # Full batch mode — every call is a complete "epoch"
+    iter.epoch_count += 1
+    iter.epoch_just_completed = true
+    return iter.all_items
+  end
+  # If we've exhausted this epoch, re-shuffle and start a new one
+  if iter.pos > n
+    iter.epoch_count += 1
+    iter.epoch_just_completed = true
+    iter.order = Random.randperm(n)
+    iter.pos = 1
+  end
+  # Take next chunk (may be smaller than batch_size for the last bin)
+  batch_end = min(iter.pos + iter.batch_size - 1, n)
+  indices = iter.order[iter.pos:batch_end]
+  iter.pos = batch_end + 1
+  return iter.all_items[indices]
+end
+
+# ---------------------------------------------------------------------------
 # Step 7: Global Loss Function
 # ---------------------------------------------------------------------------
 
-function global_loss(p_net, settings::PINNSettings, coeff_net, st, use_gpu::Bool=false; all_ode_buffers::Union{Dict, Nothing}=nothing)
+function global_loss(p_net, settings::PINNSettings, coeff_net, st, use_gpu::Bool=false;
+                     all_ode_buffers::Union{Dict, Nothing}=nothing,
+                     ode_items::Union{Vector, Nothing}=nothing)
+  # Use provided batch or fall back to full dataset
+  items = ode_items !== nothing ? ode_items : collect(settings.ode_matrices)
+
   total_loss = F(0.0)
   total_local_loss_bc = F(0.0)
   total_local_loss_pde = F(0.0)
   total_local_loss_supervised = F(0.0)
-  num_of_training_examples = length(settings.ode_matrices)
+  num_in_batch = length(items)
 
-  for (alpha_matrix_key, series_coeffs) in settings.ode_matrices
+  for (alpha_matrix_key, series_coeffs) in items
     matrix_flat = vec(alpha_matrix_key)
     boundary_condition = [series_coeffs[1], series_coeffs[2]]
-    # Look up pre-computed buffers for this ODE (nothing if not available)
-    buffers = all_ode_buffers !== nothing ? get(all_ode_buffers, alpha_matrix_key, nothing) : nothing
+    # Look up pre-computed buffers for this ODE — off the AD tape since buffers are constant w.r.t. p_net
+    buffers = Zygote.ignore() do
+      all_ode_buffers !== nothing ? get(all_ode_buffers, alpha_matrix_key, nothing) : nothing
+    end
     local_loss, local_loss_bc, local_loss_pde, local_loss_supervised = loss_fn(p_net, series_coeffs, coeff_net, st, matrix_flat, boundary_condition, settings, use_gpu; ode_buffers=buffers)
     total_loss += local_loss
     total_local_loss_bc += local_loss_bc
@@ -226,14 +278,14 @@ function global_loss(p_net, settings::PINNSettings, coeff_net, st, use_gpu::Bool
     total_local_loss_supervised += local_loss_supervised
   end
 
-  normalized_loss = total_loss / num_of_training_examples
+  normalized_loss = total_loss / num_in_batch
 
   # Breakdown is for logging only — keep it off the AD tape
   losses = Zygote.ignore() do
     (
-      bc  = Float32(total_local_loss_bc / num_of_training_examples),
-      pde = Float32(total_local_loss_pde / num_of_training_examples),
-      sup = Float32(total_local_loss_supervised / num_of_training_examples)
+      bc  = Float32(total_local_loss_bc / num_in_batch),
+      pde = Float32(total_local_loss_pde / num_in_batch),
+      sup = Float32(total_local_loss_supervised / num_in_batch)
     )
   end
 
@@ -248,7 +300,7 @@ end
 We train the PINN on the training dataset and return the network
 =#
 
-function train_pinn(settings::PINNSettings, output_dir; run_id::String=generate_run_id(settings.optimizer), milestone_interval::Int=0, on_milestone::Union{Function,Nothing}=nothing, progress_callback::Union{Function,Nothing}=nothing, write_loss_csv::Bool=true, snapshot_path::Union{String,Nothing}=nothing)
+function train_pinn(settings::PINNSettings, output_dir; run_id::String=generate_run_id(settings.optimizer), milestone_interval::Int=0, on_milestone::Union{Function,Nothing}=nothing, progress_callback::Union{Function,Nothing}=nothing, write_loss_csv::Bool=true, snapshot_path::Union{String,Nothing}=nothing, batch_size::Int=0, snapshot_epoch_interval::Int=10)
   csv_file = joinpath(output_dir, "loss.csv")
 
   use_gpu = GPUUtils.is_gpu_available()
@@ -266,7 +318,7 @@ function train_pinn(settings::PINNSettings, output_dir; run_id::String=generate_
 
   # Warm-start from snapshot if provided
   if snapshot_path !== nothing
-    raw = reinterpret(Float32, read(snapshot_path))
+    raw = load_snapshot_vector(snapshot_path)
     p_init_ca = ComponentArray(raw, getaxes(p_init_ca))
     if use_gpu
       p_init_ca = CUDA.cu(p_init_ca)
@@ -278,6 +330,15 @@ function train_pinn(settings::PINNSettings, output_dir; run_id::String=generate_
   to_device_fn = x -> GPUUtils.to_device(x; gpu=use_gpu)
   all_ode_buffers = precompute_buffers(settings, use_gpu, to_device_fn)
   @info "Pre-computed ODE buffers for $(length(all_ode_buffers)) training examples (device: $(use_gpu ? "GPU" : "CPU"))"
+
+  # Create batch iterator for mini-batching (batch_size=0 means full batch)
+  batch_iter = EpochBatchIterator(settings.ode_matrices, batch_size)
+  if batch_size > 0
+    n_odes = length(settings.ode_matrices)
+    n_bins = cld(n_odes, batch_size)
+    checkpoint_msg = snapshot_epoch_interval > 0 ? "checkpoints every $(snapshot_epoch_interval) epochs" : "intermediate checkpoints disabled"
+    @info "Mini-batching enabled: $(n_odes) ODEs → $(n_bins) bins of ≤$(batch_size), $(checkpoint_msg)"
+  end
 
   # How often to record metrics and update the progress bar (every N iterations)
   LOG_INTERVAL = 100
@@ -292,9 +353,15 @@ function train_pinn(settings::PINNSettings, output_dir; run_id::String=generate_
   latest_params = Ref{Any}(p_init_ca)  # track latest params for graceful interrupt
   iter_count = Ref(0)
 
-  # Create wrapper function for optimization — captures pre-computed buffers
+  # Create wrapper function for optimization — captures pre-computed buffers and batch iterator
   function loss_wrapper(p_net, _)
-    loss, losses = global_loss(p_net, settings, coeff_net, st, use_gpu; all_ode_buffers=all_ode_buffers)
+    # Batch selection is constant w.r.t. p_net — keep off AD tape
+    items = Zygote.ignore() do
+      next_batch!(batch_iter)
+    end
+    loss, losses = global_loss(p_net, settings, coeff_net, st, use_gpu;
+                               all_ode_buffers=all_ode_buffers,
+                               ode_items=items)
     latest_metrics[] = (losses.bc, losses.pde, losses.sup)
     return loss
   end
@@ -317,8 +384,19 @@ function train_pinn(settings::PINNSettings, output_dir; run_id::String=generate_
       progress_bar(state, l)
     end
 
-    # Check if we've hit a milestone
-    if on_milestone !== nothing && milestone_interval > 0 && iteration % milestone_interval == 0
+    # Checkpoints are saved only at configured epoch boundaries. The final model
+    # is saved separately by the training scheme after optimization completes.
+    epoch_done = Zygote.ignore() do
+      batch_iter.epoch_just_completed
+    end
+    if epoch_done
+      Zygote.ignore() do
+        @info "Epoch $(batch_iter.epoch_count) complete ($(length(batch_iter.all_items)) ODEs processed, iteration $iteration)"
+      end
+    end
+    if on_milestone !== nothing && epoch_done &&
+       snapshot_epoch_interval > 0 &&
+       batch_iter.epoch_count % snapshot_epoch_interval == 0
       p_current = use_gpu ? ComponentArray(Array(getdata(state.u)), getaxes(state.u)) : state.u
       on_milestone(p_current, iteration, coeff_net, st, run_id)
     end
@@ -549,6 +627,6 @@ end
 # Step 10: Export Functions
 # ---------------------------------------------------------------------------
 
-export PINNSettings, train_pinn, global_loss, evaluate_solution, initialize_network
+export PINNSettings, EpochBatchIterator, train_pinn, global_loss, evaluate_solution, initialize_network
 
 end

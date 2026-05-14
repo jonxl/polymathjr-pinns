@@ -143,11 +143,27 @@ Each iteration logs to `loss.csv` with the following columns:
 
 ---
 
-## Checkpointing
+## Checkpointing (Snapshots)
 
-Currently, training runs to completion without intermediate checkpoints. For long runs, consider:
-- Reducing `maxiters_adam` for testing
-- Monitoring loss CSV for convergence
+Training saves the final trained MLP weights to `results/run-{id}/model.safetensors`.
+
+When checkpointing is enabled, intermediate weights are saved to `results/run-{id}/snapshots/iter-NNNNNNN.safetensors`. These checkpoints enable:
+
+- **Warm-start**: Resume training from a saved checkpoint with `--resume <path>`
+- **Replay**: Evaluate the model at each saved iteration without retraining
+
+Snapshot behavior is controlled via CLI flags:
+
+| Flag | Effect |
+|------|--------|
+| `--no-snap` | Disable snapshot saving entirely |
+| `--snap-every N` | Legacy iteration interval; mini-batch snapshots use `--epochs` |
+| `--epochs N` | Save after every N epochs in mini-batch mode (default: 10) |
+| `--resume <path>` | Warm-start from a `.safetensors` snapshot file; legacy `.bin` files are still readable |
+
+`--no-snap` disables intermediate checkpoints only. The final `model.safetensors` is still written.
+
+See the [CLI Reference](../getting-started/cli-reference.md) for all flags.
 
 ---
 

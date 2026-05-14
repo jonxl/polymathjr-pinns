@@ -2,7 +2,7 @@
 
 Core PINN implementation for learning power series coefficients.
 
-**Location:** `modelcode/PINN.jl`
+**Location:** `architectures/PINN.jl`
 
 ---
 
@@ -72,12 +72,12 @@ global_loss(...) → (mean_loss, state, aggregated_components)
 
 ---
 
-### `train_pinn(settings, output_dir; milestone_interval=0, on_milestone=nothing)`
+### `train_pinn(settings, output_dir; on_milestone=nothing, batch_size=0, snapshot_epoch_interval=10)`
 
 Auto-detects GPU and trains with Adam. LBFGS is available but currently disabled pending convergence investigation. Returns CPU parameters regardless of training device. Writes `loss.csv` to `output_dir` after training.
 
 ```julia
-train_pinn(settings::PINNSettings, output_dir; milestone_interval=0, on_milestone=nothing) → (trained_params, network, state, run_id)
+train_pinn(settings::PINNSettings, output_dir; on_milestone=nothing, batch_size=0, snapshot_epoch_interval=10) → (trained_params, network, state, run_id, history)
 ```
 
 **Behavior:**
@@ -87,7 +87,7 @@ train_pinn(settings::PINNSettings, output_dir; milestone_interval=0, on_mileston
 - LBFGS code is present but commented out (needs further work on convergence)
 - Writes loss history to `<output_dir>/loss.csv` (rows=iterations, columns: `iteration`, `total`, `bc`, `pde`, `supervised`)
 - Transfers trained parameters back to CPU before returning
-- Optionally calls `on_milestone(params, iteration, net, state, run_id)` every `milestone_interval` iterations
+- Optionally calls `on_milestone(params, iteration, net, state, run_id)` at configured epoch boundaries for checkpointing
 
 ---
 

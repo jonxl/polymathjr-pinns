@@ -121,7 +121,7 @@ The milestone interval should be configurable in `grid_search_2d()` (default 100
 
 | File | Change |
 |------|--------|
-| `modelcode/PINN.jl` | `train_pinn()`: add `write_loss_csv` kwarg, return `history` as 5th element. `evaluate_solution()`: add `write_results_json` kwarg, return results dict as 2nd element. |
+| `architectures/PINN.jl` | `train_pinn()`: add `write_loss_csv` kwarg, return `history` as 5th element. `evaluate_solution()`: add `write_results_json` kwarg, return results dict as 2nd element. |
 | `utils/two_d_grid_search_hyperparameters.jl` | Rewrite `evaluate_weight_configuration()` to skip file I/O and return data. Rewrite `grid_search_2d()` to collect data and call new `write_grid_results_json()`. Remove `visualize_search_results()`, `save_search_summary()`, and `using Plots`. |
 | `src/main.jl` | Update destructuring of `train_pinn()` and `evaluate_solution()` return values. |
 | `utils/training_schemes.jl` | Update destructuring at all 4 call sites. |
@@ -130,7 +130,7 @@ The milestone interval should be configurable in `grid_search_2d()` (default 100
 
 ### Step 1: `train_pinn()` — return history, optional CSV write
 
-**File:** `modelcode/PINN.jl`, function at line 258
+**File:** `architectures/PINN.jl`, function at line 258
 
 - Add kwarg `write_loss_csv::Bool=true`
 - Wrap the CSV write block (lines 346-353) in `if write_loss_csv`
@@ -138,7 +138,7 @@ The milestone interval should be configurable in `grid_search_2d()` (default 100
 
 ### Step 2: `evaluate_solution()` — return results, optional JSON write
 
-**File:** `modelcode/PINN.jl`, function at line 366
+**File:** `architectures/PINN.jl`, function at line 366
 
 - Add kwarg `write_results_json::Bool=true`
 - Wrap the `append_to_results_json` call (line 393) and its surrounding `@info` (line 395) in `if write_results_json`

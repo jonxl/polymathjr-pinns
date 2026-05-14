@@ -85,7 +85,7 @@ iteration_counts = Dict(
     50000 => "50000_iters"
 )
 
-scaling_adam(settings, iteration_counts)
+run_training(settings, 10000, 100; neuron_count=100, seed=1234)
 ```
 
 ### Output

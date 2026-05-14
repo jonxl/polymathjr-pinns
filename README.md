@@ -18,7 +18,7 @@ Instead of learning the solution function directly, this PINN outputs the coeffi
 
 ```
 ├── src/main.jl              # Entry point
-├── modelcode/
+├── architectures/
 │   ├── PINN.jl              # Core PINN implementation
 │   ├── PINN_RNN.jl          # RNN-based variant
 │   └── PINN_specific.jl     # Specialized solver
@@ -45,8 +45,13 @@ cd polymathjr-pinns-jon-jeet
 julia --project=. -e 'using Pkg; Pkg.instantiate()'
 
 # 3. Run training
-julia --project=. src/main.jl
+julia --project src/main.jl
+
+# 4. See all runtime options
+julia --project src/main.jl --help
 ```
+
+Runtime knobs (training mode, snapshots, bin size) are configurable via CLI flags — see [CLI Reference](docs/getting-started/cli-reference.md).
 
 ## Documentation
 

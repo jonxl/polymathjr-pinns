@@ -13,6 +13,7 @@ This project implements a PINN that learns power series coefficients to approxim
 ### Getting Started
 - [Installation](getting-started/installation.md) - Julia & Python setup
 - [Quickstart](getting-started/quickstart.md) - First training run
+- [CLI Reference](getting-started/cli-reference.md) - Command-line flags
 - [Project Structure](getting-started/project-structure.md) - Codebase layout
 
 ### Architecture

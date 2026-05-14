@@ -116,11 +116,12 @@ Otherwise falls back to rebuilding W inside Zygote.ignore().
 function generate_loss_pde_value(settings::LossFunctionSettings; ode_buffers::Union{ODEBuffers, Nothing}=nothing)
   N1 = settings.n_terms_for_power_series + 1
 
-  W = if ode_buffers !== nothing
-    ode_buffers.W
-  else
-    # Fallback: build W matrix inside Zygote.ignore (used by evaluate_solution / CPU path)
-    Zygote.ignore() do
+  # W is constant w.r.t. a_vec — keep entirely off the AD tape
+  W = Zygote.ignore() do
+    if ode_buffers !== nothing
+      ode_buffers.W
+    else
+      # Fallback: build W matrix (used by evaluate_solution / CPU path)
       xs_cpu = Float32.(collect(settings.xs))
       ode_cpu = Float32.(collect(settings.ode_matrix_flat))
       P = length(xs_cpu)
@@ -157,11 +158,12 @@ function generate_loss_bc_value(settings::LossFunctionSettings; ode_buffers::Uni
   N1 = settings.n_terms_for_power_series + 1
   x0 = settings.x_left
 
-  pow_u, pow_du_full, bc1, bc2 = if ode_buffers !== nothing
-    (ode_buffers.pow_u, ode_buffers.pow_du, ode_buffers.bc1, ode_buffers.bc2)
-  else
-    # Fallback: rebuild inside Zygote.ignore (used by evaluate_solution / CPU path)
-    Zygote.ignore() do
+  # Power vectors and BC scalars are constant w.r.t. a_vec — keep off AD tape
+  pow_u, pow_du_full, bc1, bc2 = Zygote.ignore() do
+    if ode_buffers !== nothing
+      (ode_buffers.pow_u, ode_buffers.pow_du, ode_buffers.bc1, ode_buffers.bc2)
+    else
+      # Fallback: rebuild (used by evaluate_solution / CPU path)
       pow_u_cpu = Float32[x0^(i - 1) * INV_FACT[i] for i in 1:N1]
       pow_du_cpu = Float32[i == 1 ? 0.0f0 : x0^(i - 2) * INV_FACT[i-1] for i in 1:N1]
 
@@ -194,11 +196,12 @@ function generate_loss_supervised_value(settings::LossFunctionSettings; ode_buff
   K = settings.num_supervised
   N1 = length(settings.a_vec)
 
-  padded_data, mask = if ode_buffers !== nothing
-    (ode_buffers.padded_data, ode_buffers.mask)
-  else
-    # Fallback: rebuild inside Zygote.ignore (used by evaluate_solution / CPU path)
-    Zygote.ignore() do
+  # Padded data and mask are constant w.r.t. a_vec — keep off AD tape
+  padded_data, mask = Zygote.ignore() do
+    if ode_buffers !== nothing
+      (ode_buffers.padded_data, ode_buffers.mask)
+    else
+      # Fallback: rebuild (used by evaluate_solution / CPU path)
       d_cpu = Float32.(collect(settings.data))
       pd_cpu = zeros(Float32, N1)
       m_cpu = zeros(Float32, N1)

@@ -1,3 +1,4 @@
+using ArgParse
 using Dates
 using JSON
 using CSV
@@ -16,7 +17,7 @@ using .helper_funcs
 include("../utils/two_d_grid_search_hyperparameters.jl")
 using .TwoDGridSearchOnWeights
 
-include("../modelcode/PINN.jl")
+include("../architectures/PINN.jl")
 using .PINN
 
 include("../utils/training_schemes.jl")
@@ -27,33 +28,83 @@ training_data_dir = "./data/training_dataset.json"
 benchmark_data_dir = "./data/benchmark_dataset.json"
 
 # =========================================================================
-# Configuration: Data Generation
+# CLI Argument Parsing
 # =========================================================================
-# Controls whether and how training/benchmark datasets are created.
+function parse_commandline()
+  s = ArgParseSettings(description="PINN training for ODEs via power series")
 
-GENERATE_DATASET = true   # true = regenerate datasets via plugboard, false = use existing JSON files
-MODE = "RANDOM"          # "SPECIFIC" = hardcoded test_matrix, "RANDOM" = random ODE matrices
+  @add_arg_table! s begin
+    "--mode"
+      help = "Training mode: TRAIN or GRID_SEARCH"
+      arg_type = String
+      default = "TRAIN"
+    "--gen-data"
+      help = "Regenerate datasets via plugboard before training"
+      action = :store_true
+    "--data"
+      help = "Dataset generation mode: RANDOM or SPECIFIC"
+      arg_type = String
+      default = "RANDOM"
+    "--no-snap"
+      help = "Disable saving weight snapshots during training"
+      action = :store_true
+    "--snap-every"
+      help = "Legacy iteration checkpoint interval; mini-batch checkpoint cadence is controlled by --epochs"
+      arg_type = Int
+      default = 100
+    "--resume"
+      help = "Path to .safetensors snapshot file for warm-start (.bin legacy snapshots are still supported)"
+      arg_type = String
+      default = nothing
+    "--bins"
+      help = "ODEs per bin. 0 = full batch (all ODEs per iteration)"
+      arg_type = Int
+      default = 32
+    "--epochs"
+      help = "Save an intermediate checkpoint after every N complete epochs (mini-batch mode)"
+      arg_type = Int
+      default = 10
+    "--maxiters"
+      help = "Maximum number of training iterations (gradient updates)"
+      arg_type = Int
+      default = 10000
+  end
+
+  return parse_args(s)
+end
+
+parsed_args = parse_commandline()
+
 # =========================================================================
-# Configuration: Training Mode
+# Configuration: From CLI args (override with command-line flags)
 # =========================================================================
-# Controls which training strategy to run. Set ONE of these to true.
-#   SINGLE_RUN   — Train one PINN with fixed hyperparameters
-#   GRID_SEARCH  — Threaded 2D grid search over loss weights (pde x supervised)
-#   SCALING_ADAM — Iterate over training dataset with milestone evaluation
+GENERATE_DATASET = parsed_args["gen-data"]
+MODE = parsed_args["data"]
+TRAINING_MODE = parsed_args["mode"]
 
-TRAINING_MODE = "SCALING_ADAM"  # "SINGLE_RUN", "GRID_SEARCH", or "SCALING_ADAM"
+SAVE_SNAPSHOTS = !parsed_args["no-snap"]
+SNAPSHOT_INTERVAL = parsed_args["snap-every"]
+
+LOAD_SNAPSHOT = parsed_args["resume"] !== nothing
+SNAPSHOT_PATH = something(parsed_args["resume"], "")
+
+BIN_SIZE = parsed_args["bins"]
+SNAPSHOT_EVERY_N_EPOCHS = parsed_args["epochs"]
+MAXITERS = parsed_args["maxiters"]
 
 # =========================================================================
-# Configuration: Snapshots
+# Configuration: PINN Hyperparameters (in-file constants)
 # =========================================================================
-# Saving: periodically write model weights to results/run-{id}/snapshots/
-# Loading: warm-start training from a previously saved snapshot
-
-SAVE_SNAPSHOTS = true   # true = save weight snapshots during training, false = skip
-SNAPSHOT_INTERVAL = 100  # save a snapshot every N iterations (only when SAVE_SNAPSHOTS = true)
-
-LOAD_SNAPSHOT = false   # true = warm-start from snapshot, false = train from scratch
-SNAPSHOT_PATH = ""      # path to .bin snapshot file, e.g. "results/run-adam-a8Kf3x2Q/snapshots/iter-0100000.bin"
+NEURON_COUNT = 100
+SEED = 1234
+N = 10                        # Power series degree
+NUM_SUPERVISED = 10           # Supervised coefficients
+NUM_POINTS = 10               # Collocation points
+X_LEFT = Float32(0.0)
+X_RIGHT = Float32(1.0)
+SUPERVISED_WEIGHT = Float32(1.0)
+BC_WEIGHT = Float32(1.0)
+PDE_WEIGHT = Float32(1.0)
 
 #=
 This function does the following:
@@ -163,52 +214,28 @@ function run_training_sequence(batch_sizes::Array{Int})
   training_dataset = JSON.parsefile(training_data_dir)
   benchmark_dataset = JSON.parsefile(benchmark_data_dir)
 
-  F = Float32
-  # We will approximate the solution u(x) with a truncated power series of degree N.
-  # BS on pde_weight with supervised and bc fixed at 1.0
-
-  N = 10 # The degree of the highest power term in the series.
-
-  num_supervised = 10 # The number of coefficients we will supervise during training.
-  # Create a set of points inside the domain to enforce the ODE. These are called "collocation points".
-  num_points = 10
-
-  # Domain boundaries
-  x_left = F(0.0)  # Left boundary of the domain
-  x_right = F(1.0) # Right boundary of the domain
-
-  # Define a weight for the boundary condition, supervised coefficients, and the pde
-  supervised_weight = F(1.0)
-  bc_weight = F(1.0)
-  pde_weight = F(1.0)
-
-  xs = range(x_left, x_right, length=num_points)
+  xs = range(X_LEFT, X_RIGHT, length=NUM_POINTS)
 
   # Ensure parent results directory exists
   mkpath("results")
 
   # ---- Run selected training mode ----
-  if TRAINING_MODE == "SINGLE_RUN"
-    # Train one PINN with fixed hyperparameters
-    for (run_idx, inner_dict) in training_dataset
-      converted_dict = convert_plugboard_keys(inner_dict)
+  if TRAINING_MODE == "TRAIN"
+    milestone_interval = SAVE_SNAPSHOTS ? SNAPSHOT_INTERVAL : 0
 
-      float_converted_dict = Dict{Any, Any}()
-      for (mat, series) in converted_dict
-        float_converted_dict[Float32.(mat)] = series
-      end
+    train_settings = TrainingSchemesSettings(
+      training_dataset, benchmark_dataset,
+      N, NUM_SUPERVISED, NUM_POINTS,
+      X_LEFT, X_RIGHT,
+      SUPERVISED_WEIGHT, BC_WEIGHT, PDE_WEIGHT, xs)
 
-      settings = PINNSettings(10, 1234, float_converted_dict, 1000, N, num_supervised, num_points, x_left, x_right, supervised_weight, bc_weight, pde_weight, xs, "adam")
-
-      run_id = generate_run_id(settings.optimizer)
-      output_dir = joinpath("results", "run-$run_id")
-      mkpath(output_dir)
-
-      snap = LOAD_SNAPSHOT ? SNAPSHOT_PATH : nothing
-      p_trained, coeff_net, st, _, _ = train_pinn(settings, output_dir; run_id=run_id, snapshot_path=snap)
-      function_error, _ = evaluate_solution(settings, p_trained, coeff_net, st, benchmark_dataset["01"], output_dir, run_id)
-      @info "Function error: $function_error"
-    end
+    snap = LOAD_SNAPSHOT ? SNAPSHOT_PATH : nothing
+    run_training(train_settings, MAXITERS, milestone_interval;
+                 snapshot_path=snap,
+                 batch_size=BIN_SIZE,
+                 snapshot_epoch_interval=SAVE_SNAPSHOTS ? SNAPSHOT_EVERY_N_EPOCHS : 0,
+                 neuron_count=NEURON_COUNT,
+                 seed=SEED)
 
   elseif TRAINING_MODE == "GRID_SEARCH"
     # Threaded 2D grid search over pde_weight x supervised_weight
@@ -226,26 +253,17 @@ function run_training_sequence(batch_sizes::Array{Int})
       :supervised, (0.1, 1.0),
       2;
       fixed_weights=(bc=1.0,),
-      num_supervised=num_supervised,
+      num_supervised=NUM_SUPERVISED,
       N=N,
-      x_left=x_left,
-      x_right=x_right,
+      x_left=X_LEFT,
+      x_right=X_RIGHT,
       xs=xs,
       base_data_dir=output_dir
     )
     @info "Grid search complete" best_objective=result.best_objective best_weights=result.best_weights
 
-  elseif TRAINING_MODE == "SCALING_ADAM"
-    # Iterate over training dataset with milestone callbacks
-    maxiters = 1000
-    milestone_interval = SAVE_SNAPSHOTS ? SNAPSHOT_INTERVAL : 0
-
-    scaling_adam_settings = TrainingSchemesSettings(training_dataset, benchmark_dataset, N, num_supervised, num_points, x_left, x_right, supervised_weight, bc_weight, pde_weight, xs)
-    snap = LOAD_SNAPSHOT ? SNAPSHOT_PATH : nothing
-    scaling_adam(scaling_adam_settings, maxiters, milestone_interval; snapshot_path=snap)
-
   else
-    error("Unknown TRAINING_MODE: $TRAINING_MODE. Use \"SINGLE_RUN\", \"GRID_SEARCH\", or \"SCALING_ADAM\".")
+    error("Unknown TRAINING_MODE: $TRAINING_MODE. Use \"TRAIN\" or \"GRID_SEARCH\".")
   end
 end
 

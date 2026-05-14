@@ -6,7 +6,7 @@
 polymathjr-pinns-jon-jeet/
 ├── src/
 │   └── main.jl                 # Entry point
-├── modelcode/
+├── architectures/
 │   ├── PINN.jl                 # Core feedforward PINN
 │   ├── PINN_RNN.jl             # RNN-based variant
 │   └── PINN_specific.jl        # Specialized 1st-order solver
@@ -38,7 +38,7 @@ polymathjr-pinns-jon-jeet/
 | File | Purpose |
 |------|---------|
 | `src/main.jl` | Orchestrates training runs |
-| `modelcode/PINN.jl` | Core PINN with `PINNSettings`, `train_pinn()`, `global_loss()` |
+| `architectures/PINN.jl` | Core PINN with `PINNSettings`, `train_pinn()`, `global_loss()` |
 | `utils/plugboard.jl` | Generates ODEs and computes power series coefficients |
 | `utils/loss_functions.jl` | PDE, BC, supervised loss functions |
 | `utils/gpu_utils.jl` | GPU detection, device transfer utilities |

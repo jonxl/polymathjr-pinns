@@ -5,7 +5,7 @@ using Plots
 using JSON
 using Dates
 
-include("../modelcode/PINN.jl")
+include("../architectures/PINN.jl")
 using .PINN
 
 include("../utils/helper_funcs.jl")
@@ -16,6 +16,9 @@ using .TwoDGridSearchOnWeights
 
 include("../utils/snapshot_utils.jl")
 using .SnapshotUtils
+
+include("../utils/safetensors_utils.jl")
+using .SafeTensorSnapshots
 
 struct TrainingSchemesSettings
   training_dataset::Dict{String,Dict{String,Any}}
@@ -52,43 +55,55 @@ function scaling_neurons(settings::TrainingSchemesSettings, neurons_counts::Dict
   end
 end
 
-## Enough neurons, lets do iterations — train once, evaluate at milestones.
-function scaling_adam(settings::TrainingSchemesSettings, maxiters::Int, milestone_interval::Int; snapshot_path::Union{String,Nothing}=nothing)
+## Unified training path — train once, evaluate at milestones.
+function run_training(settings::TrainingSchemesSettings, maxiters::Int, milestone_interval::Int; snapshot_path::Union{String,Nothing}=nothing, batch_size::Int=0, snapshot_epoch_interval::Int=10, neuron_count::Int=100, seed::Int=1234)
   for (run_idx, inner_dict) in settings.training_dataset
     converted_dict = convert_plugboard_keys(inner_dict)
 
-    pinn_settings = PINNSettings(100, 1234, converted_dict, maxiters, settings.num_supervised, settings.N, settings.num_points, settings.x_left, settings.x_right, settings.supervised_weight, settings.bc_weight, settings.pde_weight, settings.xs, "adam")
+    # Convert matrix keys to Float32 for GPU/AD compatibility
+    float_dict = Dict{Any,Any}()
+    for (mat, series) in converted_dict
+      float_dict[Float32.(mat)] = series
+    end
+
+    pinn_settings = PINNSettings(neuron_count, seed, float_dict, maxiters, settings.num_supervised, settings.N, settings.num_points, settings.x_left, settings.x_right, settings.supervised_weight, settings.bc_weight, settings.pde_weight, settings.xs, "adam")
 
     # Generate run_id upfront so the output directory is known before training
     run_id = generate_run_id(pinn_settings.optimizer)
     output_dir = joinpath("results", "run-$run_id")
     mkpath(output_dir)
 
-    # Collect milestones in memory
+    checkpointing_enabled = snapshot_epoch_interval > 0
+
+    # Collect checkpoint evaluations in memory
     milestones = NamedTuple[]
 
-    # Milestone callback — called mid-training every milestone_interval iterations
-    function on_milestone(p_current, iteration, coeff_net, st, _run_id)
-      # Create snapshot directory on first milestone call
+    # Checkpoint callback — called by train_pinn at configured epoch boundaries.
+    function on_checkpoint(p_current, iteration, coeff_net, st, _run_id)
       snapshot_dir = joinpath(output_dir, "snapshots")
       mkpath(snapshot_dir)
 
-      # Save model weights as raw Float32 binary
-      snapshot_path = joinpath(snapshot_dir, "iter-$(lpad(iteration, 7, '0')).bin")
-      write(snapshot_path, Float32.(vec(p_current)))
+      snapshot_path = joinpath(snapshot_dir, "iter-$(lpad(iteration, 7, '0')).safetensors")
+      save_safetensors_vector(snapshot_path, p_current)
 
       error, eval_results = evaluate_solution(pinn_settings, p_current, coeff_net, st, settings.benchmark_dataset["01"], output_dir, run_id; iteration=iteration, write_results_json=false)
       coeffs = length(eval_results) > 0 ? eval_results[end]["pinn_coefficients"] : Float64[]
       push!(milestones, (iteration=iteration, objective=Float64(error), coefficients=coeffs))
-      @info "Milestone $iteration — error: $error"
+      @info "Checkpoint $iteration — error: $error"
     end
 
-    # Train once, evaluating at each milestone interval
-    p_trained, coeff_net, st, _, history = train_pinn(pinn_settings, output_dir; run_id=run_id, milestone_interval=milestone_interval, on_milestone=on_milestone, snapshot_path=snapshot_path)
+    checkpoint_callback = checkpointing_enabled ? on_checkpoint : nothing
+
+    # Train once, optionally saving checkpoint weights at epoch boundaries.
+    p_trained, coeff_net, st, _, history = train_pinn(pinn_settings, output_dir; run_id=run_id, milestone_interval=milestone_interval, on_milestone=checkpoint_callback, snapshot_path=snapshot_path, batch_size=batch_size, snapshot_epoch_interval=snapshot_epoch_interval)
 
     # Final evaluation
     final_error, final_results = evaluate_solution(pinn_settings, p_trained, coeff_net, st, settings.benchmark_dataset["01"], output_dir, run_id; write_results_json=false)
     final_coeffs = length(final_results) > 0 ? final_results[end]["pinn_coefficients"] : Float64[]
+
+    # Save the final trained MLP weights as the primary Hugging Face artifact.
+    final_model_path = joinpath(output_dir, "model.safetensors")
+    save_safetensors_vector(final_model_path, p_trained)
 
     # Extract metadata from eval results
     ode_matrix = Float64[]
@@ -106,11 +121,14 @@ function scaling_adam(settings::TrainingSchemesSettings, maxiters::Int, mileston
     output = Dict(
       "metadata" => Dict(
         "timestamp" => Dates.format(now(), "yyyy-mm-ddTHH:MM:SS"),
-        "neuron_count" => 100,
+        "neuron_count" => neuron_count,
         "maxiters" => maxiters,
         "milestone_interval" => milestone_interval,
+        "checkpoint_epoch_interval" => snapshot_epoch_interval,
+        "checkpointing_enabled" => checkpointing_enabled,
+        "model_file" => "model.safetensors",
         "optimizer" => "adam",
-        "seed" => 1234,
+        "seed" => seed,
         "N" => settings.N,
         "num_supervised" => settings.num_supervised,
         "domain" => [Float64(settings.x_left), Float64(settings.x_right)],
@@ -124,7 +142,8 @@ function scaling_adam(settings::TrainingSchemesSettings, maxiters::Int, mileston
       ),
       "final" => Dict(
         "objective" => Float64(final_error),
-        "coefficients" => final_coeffs
+        "coefficients" => final_coeffs,
+        "model_file" => "model.safetensors"
       ),
       "milestones" => [
         Dict(
@@ -135,7 +154,7 @@ function scaling_adam(settings::TrainingSchemesSettings, maxiters::Int, mileston
       ]
     )
 
-    results_file = joinpath(output_dir, "scaling_adam_results.json")
+    results_file = joinpath(output_dir, "training_results.json")
     open(results_file, "w") do io
       JSON.print(io, output, 2)
     end
@@ -210,6 +229,6 @@ end
 
 
 
-export TrainingSchemesSettings, scaling_neurons, grid_search_at_scale, scaling_adam, load_and_infer, replay_snapshots
+export TrainingSchemesSettings, scaling_neurons, grid_search_at_scale, run_training, load_and_infer, replay_snapshots
 
 end

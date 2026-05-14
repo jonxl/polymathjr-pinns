@@ -19,10 +19,8 @@ deps/build.log
 .vscode/
 .idea/
 
-# Claude Code
 .claude/
-
-# OpenCode
+.codex
 .opencode/
 
 # Beads

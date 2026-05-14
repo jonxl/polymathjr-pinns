@@ -8,6 +8,14 @@ Entry point for training runs.
 
 ## Functions
 
+### `parse_commandline()`
+
+Parses CLI flags and returns a `Dict{String,Any}` of runtime settings. Called at module load time — the returned values populate global config variables (`TRAINING_MODE`, `SAVE_SNAPSHOTS`, `BIN_SIZE`, etc.).
+
+See [CLI Reference](../getting-started/cli-reference.md) for the full flag list.
+
+---
+
 ### `create_training_run_dirs(run_number, batch_size)`
 
 Creates output directory structure for a training run.
@@ -56,10 +64,14 @@ run_training_sequence(batch_sizes::Array{Int})
 
 ## Configuration
 
+Runtime settings (training mode, snapshots, bin size, etc.) are controlled via CLI flags — see the [CLI Reference](../getting-started/cli-reference.md) for the full list.
+
+PINN hyperparameters (`NEURON_COUNT`, `SEED`, `MAXITERS`, loss weights, etc.) remain as in-file constants.
+
 ```julia
-batch = [10]  # Array of batch sizes to train on
+batch = [1000]  # Number of ODEs to generate / train on
 ```
 
 ---
 
-*See also: [PINN.jl](pinn.md), [plugboard.jl](plugboard.md)*
+*See also: [CLI Reference](../getting-started/cli-reference.md), [PINN.jl](pinn.md), [plugboard.jl](plugboard.md)*

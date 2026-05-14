@@ -29,6 +29,7 @@ Key packages installed:
 
 | Package | Purpose |
 |---------|---------|
+| ArgParse | CLI argument parsing |
 | Lux | Neural network layers |
 | Optimization | Optimization framework |
 | OptimizationOptimJL | LBFGS optimizer (under investigation) |

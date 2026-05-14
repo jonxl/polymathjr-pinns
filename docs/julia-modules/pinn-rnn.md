@@ -2,7 +2,7 @@
 
 RNN-based PINN architecture using GRU cells.
 
-**Location:** `modelcode/PINN_RNN.jl`
+**Location:** `architectures/PINN_RNN.jl`
 
 ---
 

@@ -10,7 +10,7 @@ using Dates
 using DataFrames
 using CSV
 
-include("../modelcode/PINN.jl")
+include("../architectures/PINN.jl")
 using .PINN
 
 include("../utils/gpu_utils.jl")

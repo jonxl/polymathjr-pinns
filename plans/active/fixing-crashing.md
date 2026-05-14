@@ -10,7 +10,7 @@ Training crashes or slows severely on GPU due to repeated memory allocation/deal
 
 ### 1. Repeated GPU transfers every loss call (HOT PATH)
 
-**File:** `modelcode/PINN.jl:L167-171`
+**File:** `architectures/PINN.jl:L167-171`
 
 Inside `loss_fn`, the `Zygote.ignore()` block calls `GPUUtils.to_device()` on `ode_matrix_flat`, `boundary_condition`, `data`, and `xs` **every single time** the loss function is called. These arrays are constants for a given ODE — they never change during training.
 
@@ -49,7 +49,7 @@ The W matrix depends only on `xs`, `ode_matrix_flat`, and `INV_FACT` — all con
 
 ### 5. Sequential ODE iteration with per-item transfers
 
-**File:** `modelcode/PINN.jl:L206-241`
+**File:** `architectures/PINN.jl:L206-241`
 
 `global_loss` loops over every ODE in the training set, calling `loss_fn` for each. Each call triggers its own set of GPU transfers (issue #1). With 100 training examples x 100k iterations = 10 million redundant transfer batches.
 
@@ -94,7 +94,7 @@ Instead of looping over ODEs sequentially in `global_loss`, stack all ODE inputs
 
 | File | Changes |
 |------|---------|
-| `modelcode/PINN.jl` | Add `PrecomputedBuffers` struct, `precompute_buffers()`, pass buffers through `train_pinn` → `global_loss` → `loss_fn` |
+| `architectures/PINN.jl` | Add `PrecomputedBuffers` struct, `precompute_buffers()`, pass buffers through `train_pinn` → `global_loss` → `loss_fn` |
 | `utils/loss_functions.jl` | Accept pre-computed W, power vectors, padded data as args instead of recomputing in `Zygote.ignore()` |
 | `utils/training_schemes.jl` | Pass buffer precomputation through `scaling_adam` and other training modes |
 

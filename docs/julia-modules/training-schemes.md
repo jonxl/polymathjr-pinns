@@ -46,19 +46,23 @@ Creates separate training runs for each neuron count.
 
 ---
 
-### `scaling_adam(settings, iteration_counts)`
+### `run_training(settings, maxiters, milestone_interval; kwargs...)`
 
-Trains with different Adam iteration counts.
+Unified training path — trains a PINN once, evaluates at milestones.
 
 ```julia
-scaling_adam(settings, iteration_counts::Dict)
+run_training(settings::TrainingSchemesSettings, maxiters::Int, milestone_interval::Int;
+             snapshot_path=nothing, batch_size=0, snapshot_epoch_interval=10,
+             neuron_count=100, seed=1234)
 ```
 
 **Example:**
 ```julia
-iteration_counts = Dict(1000 => "short", 10000 => "medium", 50000 => "long")
-scaling_adam(settings, iteration_counts)
+run_training(settings, 10000, 100;
+             batch_size=32, neuron_count=100, seed=1234)
 ```
+
+Writes `model.safetensors` for the final trained MLP, plus `training_results.json` with metadata, final results, and checkpoint history. Intermediate checkpoint weights are written under `snapshots/` when checkpointing is enabled.
 
 ---
 
@@ -79,7 +83,7 @@ Combines neuron scaling with hyperparameter grid search.
 | Function | Use Case |
 |----------|----------|
 | `scaling_neurons` | Find optimal network size |
-| `scaling_adam` | Determine convergence iterations |
+| `run_training` | Train a PINN with configurable hyperparameters and optional milestone snapshots |
 | `grid_search_at_scale` | Full hyperparameter optimization |
 
 ---
