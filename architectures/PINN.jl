@@ -314,16 +314,12 @@ function train_pinn(settings::PINNSettings, output_dir; run_id::String=generate_
     end
   end
 
-  coeff_net, p_init_ca, st = initialize_network(settings; use_gpu=use_gpu)
-
-  # Warm-start from snapshot if provided
   if snapshot_path !== nothing
-    raw = load_snapshot_vector(snapshot_path)
-    p_init_ca = ComponentArray(raw, getaxes(p_init_ca))
-    if use_gpu
-      p_init_ca = CUDA.cu(p_init_ca)
-    end
-    @info "Loaded weights from snapshot: $snapshot_path"
+    coeff_net, p_ca, st, _ = SafeTensorSnapshots.load_model(snapshot_path)
+    p_init_ca = use_gpu ? CUDA.cu(p_ca) : p_ca
+    @info "Loaded model from snapshot: $snapshot_path"
+  else
+    coeff_net, p_init_ca, st = initialize_network(settings; use_gpu=use_gpu)
   end
 
   # Pre-compute all constant ODE data on the target device (GPU or CPU) once

@@ -53,7 +53,7 @@ function parse_commandline()
       arg_type = Int
       default = 100
     "--resume"
-      help = "Path to .safetensors snapshot file for warm-start (.bin legacy snapshots are still supported)"
+      help = "Path to .safetensors model file for warm-start"
       arg_type = String
       default = nothing
     "--bins"

@@ -4,62 +4,45 @@ using ComponentArrays
 using Lux
 import Random
 
-# PINN module is provided by the parent (training_schemes) — do not re-include
-using ..PINN
-
 include("../utils/safetensors_utils.jl")
 using .SafeTensorSnapshots
 
 """
-    load_and_infer(snapshot_path::String, settings::PINNSettings, ode_matrix::Matrix)
+    load_and_infer(snapshot_path::String, ode_matrix::Matrix)
 
-Load saved model weights from a `.safetensors` snapshot and run inference to get coefficients.
-Legacy raw `.bin` snapshots are still readable.
-
-The network architecture is rebuilt deterministically from `PINNSettings` via `initialize_network`,
-so the `ComponentArray` axis layout is always identical to what was saved.
+Load model from a `.safetensors` file and run inference to get coefficients.
+The file is fully self-contained — no external PINNSettings needed.
 
 Returns a vector of predicted coefficients.
 """
-function load_and_infer(snapshot_path::String, settings::PINNSettings, ode_matrix::Matrix)
-  # 1. Rebuild network from settings (deterministic from neuron_num, n_terms, seed)
-  coeff_net, p_template, st = initialize_network(settings)
-
-  # 2. Load saved weights into the same ComponentArray layout
-  raw = load_snapshot_vector(snapshot_path)
-  p = ComponentArray(raw, getaxes(p_template))
-
-  # 3. Run inference
+function load_and_infer(snapshot_path::String, ode_matrix::Matrix)
+  coeff_net, p, st, _ = SafeTensorSnapshots.load_model(snapshot_path)
   matrix_flat = Float32.(vec(ode_matrix))
   coefficients = first(coeff_net(matrix_flat, p, st))[:, 1]
-
   return coefficients
 end
 
 """
-    replay_snapshots(run_dir::String, settings::PINNSettings, ode_matrix::Matrix)
+    replay_snapshots(run_dir::String, ode_matrix::Matrix)
 
-Sweep every `.safetensors` snapshot in `run_dir`, run inference on each with the given
-ODE matrix, and return how the model's coefficient predictions evolve over training.
-Legacy raw `.bin` files are included if present.
+Sweep every `.safetensors` snapshot in `run_dir`, run inference on each, and
+return how coefficient predictions evolve over training.
+No external settings needed — each file is self-contained.
 
-Returns a vector of named tuples: `[(iteration=Int, coefficients=Vector{Float32}), ...]`
-sorted by iteration number.
+Returns a vector of named tuples: [(iteration=Int, coefficients=Vector{Float32}), ...]
 """
-function replay_snapshots(run_dir::String, settings::PINNSettings, ode_matrix::Matrix)
-  # Find all safetensors snapshots, plus legacy .bin files, and sort by iteration number.
-  snapshot_files = filter(f -> endswith(f, ".safetensors") || endswith(f, ".bin"), readdir(run_dir))
+function replay_snapshots(run_dir::String, ode_matrix::Matrix)
+  snapshot_files = filter(f -> endswith(f, ".safetensors"), readdir(run_dir))
   sort!(snapshot_files)
 
   results = NamedTuple[]
   for fname in snapshot_files
-    # Extract iteration from filename: "iter-0001000.safetensors" → 1000
-    m = match(r"iter-(\d+)\.(?:safetensors|bin)", fname)
+    m = match(r"iter-(\d+)\.safetensors", fname)
     m === nothing && continue
     iteration = parse(Int, m.captures[1])
 
     snapshot_path = joinpath(run_dir, fname)
-    coefficients = load_and_infer(snapshot_path, settings, ode_matrix)
+    coefficients = load_and_infer(snapshot_path, ode_matrix)
     push!(results, (iteration=iteration, coefficients=Vector{Float32}(coefficients)))
   end
 

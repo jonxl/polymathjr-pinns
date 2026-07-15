@@ -84,7 +84,7 @@ function run_training(settings::TrainingSchemesSettings, maxiters::Int, mileston
       mkpath(snapshot_dir)
 
       snapshot_path = joinpath(snapshot_dir, "iter-$(lpad(iteration, 7, '0')).safetensors")
-      save_safetensors_vector(snapshot_path, p_current)
+      save_safetensors_model(snapshot_path, p_current, coeff_net, seed)
 
       error, eval_results = evaluate_solution(pinn_settings, p_current, coeff_net, st, settings.benchmark_dataset["01"], output_dir, run_id; iteration=iteration, write_results_json=false)
       coeffs = length(eval_results) > 0 ? eval_results[end]["pinn_coefficients"] : Float64[]
@@ -103,7 +103,7 @@ function run_training(settings::TrainingSchemesSettings, maxiters::Int, mileston
 
     # Save the final trained MLP weights as the primary Hugging Face artifact.
     final_model_path = joinpath(output_dir, "model.safetensors")
-    save_safetensors_vector(final_model_path, p_trained)
+    save_safetensors_model(final_model_path, p_trained, coeff_net, seed)
 
     # Extract metadata from eval results
     ode_matrix = Float64[]
