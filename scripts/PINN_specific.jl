@@ -106,7 +106,7 @@ xs = range(x_left, x_right, length=num_points)
 
 # Define a weight for the boundary condition part of the loss. This is a hyperparameter
 # that helps balance the importance of satisfying the ODE vs. the boundary conditions.
-bc_weight = F(100.0)
+bc_weight = F(1.0)
 
 # Define the neural network architecture using Lux.
 # It takes one dummy input and outputs N+1 values, which will be our coefficients a₀ to aₙ.
@@ -159,10 +159,31 @@ function loss_fn(p_net, _)
              abs2(Du_approx(x_right) - F(1.0))
 
   
-  loss_supervised = sum(abs2, a_vec[1:num_supervised] - training_data) / num_supervised 
+  loss_supervised = sum(abs2, a_vec[1:num_supervised] - training_data) / num_supervised
   # loss_supervised = 0.0 # This is a placeholder for any supervised loss, if needed.
   # The total loss is a weighted sum of the two components.
   return loss_pde + bc_weight * loss_bc + supervised_weight * loss_supervised
+end
+
+# Same three terms returned SEPARATELY (raw / unweighted) for logging & plotting.
+function loss_components(p_net)
+  a_vec = first(coeff_net([x_left], p_net, st))[:, 1]
+  u_approx(x)   = sum(a_vec[i] * x^(i-1) / fact[i] for i in 1:N+1)
+  Du_approx(x)  = sum(a_vec[i] * x^(i-2) / fact[i-1] for i in 2:N+1)
+  D3u_approx(x) = sum(a_vec[i] * x^(i-4) / fact[i-3] for i in 4:N+1)
+  loss_pde = sum(abs2, D3u_approx(xi) - cos(F(pi)*xi) for xi in xs) / num_points
+  loss_bc  = abs2(u_approx(x_left)  - F(0.0)) +
+             abs2(u_approx(x_right)  - F(cos(pi))) +
+             abs2(Du_approx(x_right) - F(1.0))
+  loss_supervised = sum(abs2, a_vec[1:num_supervised] - training_data) / num_supervised
+  return loss_pde, loss_bc, loss_supervised
+end
+
+# Histories of the three components, logged every optimizer step.
+pde_hist = Float64[]; bc_hist = Float64[]; sup_hist = Float64[]
+function log_components(p_net)
+  lp, lb, ls = loss_components(p_net)
+  push!(pde_hist, lp); push!(bc_hist, lb); push!(sup_hist, ls)
 end
 
 
@@ -179,6 +200,7 @@ iter_count = 0
 callback = function (p, l)
   global iter_count += 1
   global last_shown_values
+  log_components(p.u)   # record pde / bc / supervised separately this step
 
   # If the current iteration is a milestone (1, 100, 200, etc.),
   # update the values that we want to display.
@@ -211,11 +233,13 @@ res = solve(prob,
 
 
 # ---------------- stage 2 : LBFGS ----------------
+n_adam = length(pde_hist)   # mark Adam -> LBFGS boundary for the component plot
 maxiters_lbfgs = 100
 p_bar2 = Progress(maxiters_lbfgs, desc = "LBFGS fine-tune... ")
 iter2  = 0
-cb2 = function (_, l)
+cb2 = function (state, l)
     global iter2 += 1
+    log_components(state.u)
     ProgressMeter.next!(p_bar2; showvalues = [(:iter, iter2), (:loss, l)])
     return false
 end
@@ -286,8 +310,19 @@ plot_coeffs = plot(0:N, coeff_error,
                   legend=:topright)
 savefig(plot_coeffs, "data/coefficient_error.png")
 
+# --- Plot 4: the three loss components vs iteration (raw, unweighted) ---
+its = 1:length(pde_hist)
+plot_comp = plot(its, max.(pde_hist, 1e-20), yscale=:log10, lw=2, label="pde residual",
+                 title="Loss components vs iteration (bc_weight=$bc_weight, sup_weight=$supervised_weight)",
+                 xlabel="Iteration (Adam then LBFGS)", ylabel="component value")
+plot!(plot_comp, its, max.(bc_hist, 1e-20),  lw=2, label="bc")
+plot!(plot_comp, its, max.(sup_hist, 1e-20), lw=2, label="supervised")
+vline!(plot_comp, [n_adam + 0.5], ls=:dash, color=:gray, label="Adam | LBFGS")
+savefig(plot_comp, "data/loss_components.png")
+
 
 println("\nPlots saved to 'data' directory.")
 println("- solution_comparison.png")
 println("- error.png")
 println("- coefficient_error.png")
+println("- loss_components.png")
