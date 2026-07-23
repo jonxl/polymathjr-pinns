@@ -7,6 +7,9 @@ import Random
 include("../utils/safetensors_utils.jl")
 using .SafeTensorSnapshots
 
+include("../utils/helper_funcs.jl")
+using .helper_funcs
+
 """
     load_and_infer(snapshot_path::String, ode_matrix::Matrix)
 
@@ -17,10 +20,30 @@ Returns a vector of predicted coefficients.
 """
 function load_and_infer(snapshot_path::String, ode_matrix::Matrix)
   coeff_net, p, st, _ = SafeTensorSnapshots.load_model(snapshot_path)
-  matrix_flat = Float32.(vec(ode_matrix))
+  matrix_flat = canonicalize_alpha(vec(ode_matrix))  # must match training input convention
   coefficients = first(coeff_net(matrix_flat, p, st))[:, 1]
   return coefficients
 end
+
+"""
+    construct_solution(ψ::AbstractVector) → f_Ω
+
+Turn the model's output — the monomial coefficient vector ψ — into the callable
+constructed function f_Ω(x) = Σ ψ_n xⁿ (evaluated via Horner's method).
+"""
+function construct_solution(ψ::AbstractVector)
+  coeffs = Tuple(Float64.(ψ))   # evalpoly expects ascending-order coefficients
+  return x -> evalpoly(Float64(x), coeffs)
+end
+
+"""
+    load_solution(snapshot_path::String, ode_matrix::Matrix) → f_Ω
+
+One step from a saved model + ODE matrix to the callable solution:
+inference (`load_and_infer`) composed with `construct_solution`.
+"""
+load_solution(snapshot_path::String, ode_matrix::Matrix) =
+  construct_solution(load_and_infer(snapshot_path, ode_matrix))
 
 """
     replay_snapshots(run_dir::String, ode_matrix::Matrix)
@@ -49,6 +72,6 @@ function replay_snapshots(run_dir::String, ode_matrix::Matrix)
   return results
 end
 
-export load_and_infer, replay_snapshots
+export load_and_infer, replay_snapshots, construct_solution, load_solution
 
 end

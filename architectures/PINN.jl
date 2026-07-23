@@ -265,7 +265,8 @@ function global_loss(p_net, settings::PINNSettings, coeff_net, st, use_gpu::Bool
   num_in_batch = length(items)
 
   for (alpha_matrix_key, series_coeffs) in items
-    matrix_flat = vec(alpha_matrix_key)
+    # Canonicalized so the fallback (no-buffers) path matches precompute_buffers
+    matrix_flat = canonicalize_alpha(vec(alpha_matrix_key))
     boundary_condition = [series_coeffs[1], series_coeffs[2]]
     # Look up pre-computed buffers for this ODE — off the AD tape since buffers are constant w.r.t. p_net
     buffers = Zygote.ignore() do
@@ -496,19 +497,21 @@ function evaluate_solution(settings::PINNSettings, p_trained, coeff_net, st, ben
   all_results = Dict[]
 
   for (alpha_matrix_key, benchmark_series_coeffs) in converted_benchmark_dataset
-    matrix_flat = Float32.(vec(alpha_matrix_key))  # Flatten to Float32 column vector
+    matrix_flat = canonicalize_alpha(vec(alpha_matrix_key))  # Canonical Float32 column vector — must match training input
     boundary_condition = [benchmark_series_coeffs[1], benchmark_series_coeffs[2]]
 
     benchmark_loss, _, _, _ = loss_fn(p_trained, benchmark_series_coeffs, coeff_net, st, matrix_flat, boundary_condition, settings::PINNSettings)
     loss += benchmark_loss
 
-    a_learned = first(coeff_net(matrix_flat, p_trained, st))[:, 1] # extract learned coefficients
+    a_learned = first(coeff_net(matrix_flat, p_trained, st))[:, 1] # learned MONOMIAL coefficients ψ_n
+    # Report in derivative basis (a_n = ψ_n · n!) to match benchmark_coefficients
+    a_learned_derivative = Float64.(a_learned) .* Float64.(fact[1:length(a_learned)])
 
     # Write results.json — self-contained output for nn-viewer
     results = Dict(
       "alpha_matrix" => vec(alpha_matrix_key),
       "benchmark_coefficients" => benchmark_series_coeffs,
-      "pinn_coefficients" => Float64.(a_learned),
+      "pinn_coefficients" => a_learned_derivative,
       "function_error" => Float64(loss),
       "iteration" => iteration
     )

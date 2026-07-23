@@ -39,11 +39,25 @@ function generate_random_alpha_matrix(ode_order, poly_degree)
 end
 
 # Generate matrices based on the constraint a^2 - 4b > 0
-function generate_random_alpha_matrix_with_constraint(ode_order, poly_degree)
+function generate_random_alpha_matrix_with_constraint(ode_order, poly_degree; coeff_bound::Int=1000, max_ratio::Int=10)
   rows = ode_order + 1
   cols = poly_degree + 1
+  # First-order case (2x1 matrix [α₀; α₁] for α₀·y + α₁·y' = 0):
+  # draw nonzero integers from a wide ±coeff_bound range so the matrix space is
+  # large, but cap |α₀/α₁| ≤ max_ratio — the solution is y = A·e^{-(α₀/α₁)x} and
+  # its series coefficients grow like (α₀/α₁)^n, which overflows Float32 training
+  # if the ratio is unbounded.
+  if rows == 2 && cols == 1
+    rand_nonzero() = rand(Bool) ? rand(-coeff_bound:-1) : rand(1:coeff_bound)
+    α0 = rand_nonzero()
+    α1 = rand_nonzero()
+    while abs(α0) > max_ratio * abs(α1)
+      α0 = rand_nonzero()
+      α1 = rand_nonzero()
+    end
+    return reshape([α0, α1], 2, 1)
   # Special handling for the constraint case (3x1 matrix)
-  if rows == 3 && cols == 1
+  elseif rows == 3 && cols == 1
     # Generate column matrix [1, a, b]^T with constraint a² - 4b > 0
     constraint_satisfied = false
     a = 0
@@ -77,6 +91,11 @@ function generate_random_alpha_matrix_with_constraint(ode_order, poly_degree)
     return α_matrix
   end
 end
+
+# Canonical form of an ODE matrix: divide by the leading (last) coefficient,
+# mirroring helper_funcs.canonicalize_alpha. Scalar multiples of the same ODE
+# share one canonical key — used for held-out exclusion.
+canonical_matrix_key(α_matrix) = string(Float32.(vec(α_matrix) ./ vec(α_matrix)[end]))
 
 # Factorial product - keep the same
 function factorial_product_numeric(n_val, k, i)
@@ -145,7 +164,7 @@ function solve_ode_series_closed_form(α_matrix, initial_conditions, num_terms)
 end
 
 # just generates the json file that you see in ./data
-function generate_random_ode_dataset(s::Settings, batch_index::Int)
+function generate_random_ode_dataset(s::Settings, batch_index::Int; exclude_matrix_keys::Set{String}=Set{String}(), exclude_canonical_keys::Set{String}=Set{String}(), coeff_bound::Int=1000)
   ode_order = s.ode_order
   poly_degree = s.poly_degree
 
@@ -154,14 +173,25 @@ function generate_random_ode_dataset(s::Settings, batch_index::Int)
   # Generate dataset_size examples
   for example_k in 1:s.dataset_size
     # α_matrix = generate_random_alpha_matrix(s.ode_order, s.poly_degree) # generate ODE matrix
-    α_matrix = generate_random_alpha_matrix_with_constraint(s.ode_order, s.poly_degree) # generate ODE matrix
+    α_matrix = generate_random_alpha_matrix_with_constraint(s.ode_order, s.poly_degree; coeff_bound=coeff_bound) # generate ODE matrix
+    # Held-out guarantee: re-draw if this matrix is reserved (e.g. for the benchmark set).
+    # Canonical-key exclusion also rejects scalar multiples of reserved ODEs — with
+    # canonicalized network inputs they would be the identical training example.
+    is_reserved(m) = string(m) in exclude_matrix_keys || canonical_matrix_key(m) in exclude_canonical_keys
+    retries = 0
+    while is_reserved(α_matrix)
+      retries += 1
+      retries > 1000 && error("Could not draw a matrix outside exclude_matrix_keys after 1000 retries — exclusion set may cover the whole matrix space")
+      α_matrix = generate_random_alpha_matrix_with_constraint(s.ode_order, s.poly_degree; coeff_bound=coeff_bound)
+    end
 
     # generate exactly ode_order initial conditions
     initial_conditions = Float64[]
     for i in 0:(ode_order-1)
       if i == 0
-        # push!(initial_conditions, 1.0)  # y(0) = a_0, we will set thie init condition to be 1
-        push!(initial_conditions, rand(1:5))  # y(0) = a_0
+        # Fixed IC: y(0) = 1 — the map α → solution is only well-defined when the
+        # IC is not a per-example random value the network can't see in its input.
+        push!(initial_conditions, 1.0)  # y(0) = a_0
       elseif i == 1
         # push!(initial_conditions, 2.0)  # y'(0) = a_1, we will set thie init condition to be 1
         push!(initial_conditions, rand(1:5))  # y'(0) = a_1
@@ -199,7 +229,7 @@ function generate_random_ode_dataset(s::Settings, batch_index::Int)
       continue
     end
 
-    ProgressMeter.next!(p_bar; showvalues=[(:ode, "$(example_k)/$(s.dataset_size)"), (:matrix, string(α_matrix))])
+    ProgressMeter.next!(p_bar)
   end
 end
 
@@ -212,8 +242,8 @@ function generate_specific_ode_dataset(s::Settings, batch_index::Int, α_matrix:
   initial_conditions = Float64[]
   for i in 0:(ode_order-1)
     if i == 0
-      # push!(initial_conditions, 1.0)  # y(0) = a_0, we will set thie init condition to be 1
-      push!(initial_conditions, rand(1:5))  # y(0) = a_0
+      # Fixed IC: y(0) = 1 — must match the training-data convention.
+      push!(initial_conditions, 1.0)  # y(0) = a_0
     elseif i == 1
       # push!(initial_conditions, 2.0)  # y(0) = a_0, we will set thie init condition to be 1
       # push!(initial_conditions, rand(1:5))  # y'(0) = a_1
@@ -256,8 +286,8 @@ function generate_ode_dataset_from_array_of_alpha_matrices(s::Settings, batch_in
   initial_conditions = Float64[]
   for i in 0:(ode_order-1)
     if i == 0
-      push!(initial_conditions, rand(1:10))  # y(0) = a_0
-      # push!(initial_conditions, 1)  # y(0) = a_0
+      # Fixed IC: y(0) = 1 — must match the training-data convention.
+      push!(initial_conditions, 1.0)  # y(0) = a_0
       DEBUG && @info "DEBUG: y(0) = $(initial_conditions[end])"
     elseif i == 1
       push!(initial_conditions, rand(1:11))  # y'(0) = a_1
@@ -295,5 +325,5 @@ function generate_ode_dataset_from_array_of_alpha_matrices(s::Settings, batch_in
   end
 end
 
-export Settings, generate_random_ode_dataset, generate_specific_ode_dataset, solve_ode_series_closed_form, generate_ode_dataset_from_array_of_alpha_matrices
+export Settings, generate_random_ode_dataset, generate_specific_ode_dataset, solve_ode_series_closed_form, generate_ode_dataset_from_array_of_alpha_matrices, canonical_matrix_key
 end

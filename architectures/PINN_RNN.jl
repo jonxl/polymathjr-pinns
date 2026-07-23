@@ -144,22 +144,10 @@ p_bar = Progress(maxiters, desc="Training coefficient net...") # The progress ba
 iter_count = 0
 callback = function (p, l)
   global iter_count += 1
-  global last_shown_values
-
-  # If the current iteration is a milestone (1, 100, 200, etc.),
-  # update the values that we want to display.
-  if iter_count % 100 == 0 || iter_count == 1
-      last_shown_values = [(:iter, iter_count), (:loss, l)]
-  # Also, ensure the very last iteration's values are shown.
-  elseif iter_count == maxiters
-      last_shown_values = [(:iter, iter_count), (:loss, l)]
+  if iter_count % 100 == 0 || iter_count == 1 || iter_count == maxiters
+    ProgressMeter.update!(p_bar, iter_count; showvalues = [(:iter, iter_count), (:loss, l)])
   end
-
-  # On every single step, advance the progress bar, but always display
-  # the stored "last_shown_values". This makes the text static between milestones.
-  ProgressMeter.next!(p_bar; showvalues = last_shown_values)
-  
-  return false # Return false to continue the optimization.
+  return false
 end
 
 # Define the optimization problem. We specify the loss function, the initial parameters,
@@ -182,7 +170,9 @@ p_bar2 = Progress(maxiters_lbfgs, desc = "LBFGS fine-tune... ")
 iter2  = 0
 cb2 = function (_, l)
     global iter2 += 1
-    ProgressMeter.next!(p_bar2; showvalues = [(:iter, iter2), (:loss, l)])
+    if iter2 % 10 == 0 || iter2 == 1 || iter2 == maxiters_lbfgs
+      ProgressMeter.update!(p_bar2, iter2; showvalues = [(:iter, iter2), (:loss, l)])
+    end
     return false
 end
 

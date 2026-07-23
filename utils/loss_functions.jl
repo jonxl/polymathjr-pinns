@@ -39,6 +39,15 @@ end
 # 21! fits in Float64; 1/21! ≈ 1.95e-20 is above Float32 minimum
 const INV_FACT = Float32.(1.0 ./ factorial.(big.(0:40)))
 
+# MONOMIAL BASIS: the network outputs ψ_n, the coefficients of u(x) = Σ ψ_n xⁿ.
+# The dataset stores derivative-basis coefficients a_n = u⁽ⁿ⁾(0); they are
+# converted via ψ_n = a_n / n! at load time. ψ_n stays Float32-safe at large N
+# (|ψ_n| = |r|ⁿ/n! is bounded) where a_n = rⁿ overflows Float32 when squared.
+monomial_from_derivative(series) = Float32[series[i] / factorial(big(i - 1)) for i in 1:length(series)]
+
+# d^k/dx^k xᵐ = m·(m-1)⋯(m-k+1)·x^{m-k} — the falling factorial (1 for k = 0)
+falling_factorial(m::Int, k::Int) = k == 0 ? 1.0f0 : Float32(prod(m - t for t in 0:k-1))
+
 """
     precompute_buffers(settings::PINNSettings, use_gpu::Bool, to_device_fn) → Dict{Any, ODEBuffers}
 
@@ -56,9 +65,13 @@ function precompute_buffers(settings, use_gpu::Bool, to_device_fn)
 
   for (alpha_matrix_key, series_coeffs) in settings.ode_matrices
     # --- Device-resident input arrays (currently in loss_fn Zygote.ignore block) ---
-    ode_cpu = Float32.(vec(alpha_matrix_key))
+    # Canonicalized: scalar multiples of the same ODE become one network input,
+    # and the W residual no longer scales with the raw coefficient magnitude.
+    ode_cpu = canonicalize_alpha(vec(alpha_matrix_key))
+    # BC targets u(0)=a₀=ψ₀ and u'(0)=a₁=ψ₁ are identical in both bases
     bc_cpu = Float32[series_coeffs[1], series_coeffs[2]]
-    data_cpu = Float32.(collect(series_coeffs))
+    # Supervised targets in monomial basis: ψ_n = a_n / n!
+    data_cpu = monomial_from_derivative(collect(series_coeffs))
 
     ode_flat_dev = to_device_fn(ode_cpu)
     bc_dev = to_device_fn(bc_cpu)
@@ -70,15 +83,16 @@ function precompute_buffers(settings, use_gpu::Bool, to_device_fn)
     for j in 1:P
       for i in 1:N1
         for k in 0:min(i - 1, M - 1)
-          W_cpu[j, i] += ode_cpu[k + 1] * xs_cpu[j]^(i - 1 - k) * INV_FACT[i-k]
+          # monomial basis: coefficient of ψ_{i-1} in u⁽ᵏ⁾ is the falling factorial
+          W_cpu[j, i] += ode_cpu[k + 1] * xs_cpu[j]^(i - 1 - k) * falling_factorial(i - 1, k)
         end
       end
     end
     W_dev = to_device_fn(W_cpu)
 
     # --- Power vectors (currently in generate_loss_bc_value Zygote.ignore block) ---
-    pow_u_cpu = Float32[x0^(i - 1) * INV_FACT[i] for i in 1:N1]
-    pow_du_cpu = Float32[i == 1 ? 0.0f0 : x0^(i - 2) * INV_FACT[i-1] for i in 1:N1]
+    pow_u_cpu = Float32[x0^(i - 1) for i in 1:N1]
+    pow_du_cpu = Float32[i == 1 ? 0.0f0 : (i - 1) * x0^(i - 2) for i in 1:N1]
     pow_u_dev = to_device_fn(pow_u_cpu)
     pow_du_dev = to_device_fn(pow_du_cpu)
     bc1 = bc_cpu[1]
@@ -131,7 +145,8 @@ function generate_loss_pde_value(settings::LossFunctionSettings; ode_buffers::Un
       for j in 1:P
         for i in 1:N1
           for k in 0:min(i - 1, M - 1)
-            W_cpu[j, i] += ode_cpu[k + 1] * xs_cpu[j]^(i - 1 - k) * INV_FACT[i-k]
+            # monomial basis — must match precompute_buffers
+            W_cpu[j, i] += ode_cpu[k + 1] * xs_cpu[j]^(i - 1 - k) * falling_factorial(i - 1, k)
           end
         end
       end
@@ -163,9 +178,9 @@ function generate_loss_bc_value(settings::LossFunctionSettings; ode_buffers::Uni
     if ode_buffers !== nothing
       (ode_buffers.pow_u, ode_buffers.pow_du, ode_buffers.bc1, ode_buffers.bc2)
     else
-      # Fallback: rebuild (used by evaluate_solution / CPU path)
-      pow_u_cpu = Float32[x0^(i - 1) * INV_FACT[i] for i in 1:N1]
-      pow_du_cpu = Float32[i == 1 ? 0.0f0 : x0^(i - 2) * INV_FACT[i-1] for i in 1:N1]
+      # Fallback: rebuild (used by evaluate_solution / CPU path) — monomial basis
+      pow_u_cpu = Float32[x0^(i - 1) for i in 1:N1]
+      pow_du_cpu = Float32[i == 1 ? 0.0f0 : (i - 1) * x0^(i - 2) for i in 1:N1]
 
       pu = similar(settings.a_vec)
       copyto!(pu, pow_u_cpu)
@@ -201,8 +216,10 @@ function generate_loss_supervised_value(settings::LossFunctionSettings; ode_buff
     if ode_buffers !== nothing
       (ode_buffers.padded_data, ode_buffers.mask)
     else
-      # Fallback: rebuild (used by evaluate_solution / CPU path)
-      d_cpu = Float32.(collect(settings.data))
+      # Fallback: rebuild (used by evaluate_solution / CPU path).
+      # settings.data carries RAW derivative-basis series — convert to ψ here,
+      # mirroring the conversion precompute_buffers applies to padded_data.
+      d_cpu = monomial_from_derivative(collect(settings.data))
       pd_cpu = zeros(Float32, N1)
       m_cpu = zeros(Float32, N1)
       pd_cpu[1:min(K, length(d_cpu))] .= d_cpu[1:min(K, length(d_cpu))]
@@ -221,13 +238,14 @@ function generate_loss_supervised_value(settings::LossFunctionSettings; ode_buff
 end
 
 # Keep scalar versions for evaluation/plotting (CPU only, not used in training gradient path)
+# a_vec holds monomial coefficients ψ: u(x) = Σ ψ_{i-1} x^{i-1}
 function ode_residual(settings::LossFunctionSettings, x)
   return sum(
     settings.ode_matrix_flat[order+1] * (
       order == 0 ?
-      sum(settings.a_vec[i] * x^(i - 1) / fact[i] for i in 1:settings.n_terms_for_power_series+1) :
+      sum(settings.a_vec[i] * x^(i - 1) for i in 1:settings.n_terms_for_power_series+1) :
       sum(
-        settings.a_vec[i] * x^(i - 1 - order) / fact[i-order]
+        settings.a_vec[i] * falling_factorial(i - 1, order) * x^(i - 1 - order)
         for i in (order+1):(settings.n_terms_for_power_series+1)
       )
     )
@@ -236,10 +254,10 @@ function ode_residual(settings::LossFunctionSettings, x)
 end
 
 function generate_u_approx(settings::LossFunctionSettings)
-  u_approx(x) = sum(settings.a_vec[i] * x^(i - 1) / fact[i] for i in 1:(settings.n_terms_for_power_series+1))
+  u_approx(x) = sum(settings.a_vec[i] * x^(i - 1) for i in 1:(settings.n_terms_for_power_series+1))
   return u_approx
 end
 
-export LossFunctionSettings, ODEBuffers, precompute_buffers, generate_loss_pde_value, generate_loss_bc_value, generate_loss_supervised_value, ode_residual, generate_u_approx
+export LossFunctionSettings, ODEBuffers, precompute_buffers, generate_loss_pde_value, generate_loss_bc_value, generate_loss_supervised_value, ode_residual, generate_u_approx, monomial_from_derivative, falling_factorial
 
 end

@@ -114,6 +114,20 @@ end
 
 
 """
+    canonicalize_alpha(v) → Vector{Float32}
+
+Divide a flattened ODE coefficient vector by its leading (highest-order)
+coefficient so that all scalar multiples of the same ODE map to one canonical
+network input, e.g. [870, -955] and [174, -191] → [-0.9110..., 1.0].
+Assumes the constant-coefficient column form (poly_degree = 0), where the
+leading coefficient c_{M,0} is the last element of the flattened vector.
+"""
+function canonicalize_alpha(v)
+  iszero(v[end]) && error("canonicalize_alpha: leading ODE coefficient is zero — ODE is singular")
+  return Float32.(v ./ v[end])
+end
+
+"""
 Generate a unique run ID like "adam-02-23-26"
 """
 function generate_run_id(optimizer::String)::String
@@ -154,5 +168,5 @@ function append_to_results_json(results_file, run_id, results_dict)
   end
 end
 
-export convert_plugboard_keys, exponential_solution, quadratic_formula, generate_valid_matrix, create_matrix_array, generate_run_id, append_to_results_json
+export convert_plugboard_keys, exponential_solution, quadratic_formula, generate_valid_matrix, create_matrix_array, generate_run_id, append_to_results_json, canonicalize_alpha
 end

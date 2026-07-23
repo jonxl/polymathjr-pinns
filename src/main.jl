@@ -68,6 +68,10 @@ function parse_commandline()
       help = "Maximum number of training iterations (gradient updates)"
       arg_type = Int
       default = 10000
+    "--train-size"
+      help = "Number of ODE examples to generate for the training dataset"
+      arg_type = Int
+      default = 1000
   end
 
   return parse_args(s)
@@ -97,9 +101,9 @@ MAXITERS = parsed_args["maxiters"]
 # =========================================================================
 NEURON_COUNT = 100
 SEED = 1234
-N = 10                        # Power series degree
-NUM_SUPERVISED = 10           # Supervised coefficients
-NUM_POINTS = 10               # Collocation points
+N = 20                        # Power series degree
+NUM_SUPERVISED = 21           # Supervised coefficients (all N+1 outputs)
+NUM_POINTS = 22               # Collocation points — ≥ N+1 so zero PDE loss ⟹ zero residual polynomial
 X_LEFT = Float32(0.0)
 X_RIGHT = Float32(1.0)
 SUPERVISED_WEIGHT = Float32(1.0)
@@ -166,11 +170,33 @@ function init_batches(batch_sizes::Array{Int})
       batch_sizes: Array of integers representing different batch sizes
   """
 
-  benchmark_dataset_setting::Settings = Plugboard.Settings(1, 0, 1, benchmark_data_dir, 10)
+  benchmark_dataset_setting::Settings = Plugboard.Settings(1, 0, 1, benchmark_data_dir, N + 1)
 
-  # generate training datasets and benchmarks 
+  # Plugboard merges into existing JSON files — remove stale datasets so old
+  # entries can't leak into this run (and can't break the held-out guarantee).
+  isfile(training_data_dir) && rm(training_data_dir)
+  isfile(benchmark_data_dir) && rm(benchmark_data_dir)
+
+  # Generate the benchmark FIRST, then exclude its matrices from the training
+  # draw — guarantees the evaluation ODE is never in the training set.
+  # Fixed semigroup benchmark trio (α₀·y + α₁·y' = 0 → y = e^{-(α₀/α₁)x}, y(0)=1):
+  #   A = [2; 1]  → e^{-2x}
+  #   B = [4; 3]  → e^{-(4/3)x}
+  #   C = [10; 3] → e^{-(10/3)x} = A·B   (exponents add — the generalization test)
+  semigroup_benchmark_matrices = Matrix{Int64}[[2; 1;;], [4; 3;;], [10; 3;;]]
+  for m in semigroup_benchmark_matrices
+    Plugboard.generate_specific_ode_dataset(benchmark_dataset_setting, 1, m)
+  end
+  benchmark_data = JSON.parsefile(benchmark_data_dir)
+  held_out_keys = Set{String}(k for inner in values(benchmark_data) for k in keys(inner))
+  # Canonical exclusion: scalar multiples of a benchmark ODE are the same
+  # canonicalized network input, so they must be held out of training too.
+  held_out_canonical = Set{String}(Plugboard.canonical_matrix_key(m) for m in semigroup_benchmark_matrices)
+  @info "Benchmark generated first — $(length(held_out_keys)) matrix key(s) held out of training (plus all scalar multiples)" held_out_keys
+
+  # generate training datasets and benchmarks
   for (batch_index, k) in enumerate(batch_sizes)
-    training_dataset_setting::Settings = Plugboard.Settings(1, 0, k, training_data_dir, 10)
+    training_dataset_setting::Settings = Plugboard.Settings(1, 0, k, training_data_dir, N + 1)
     # set up plugboard for solutions to ay' + by = 0 where a,b != 0
     run_number_formatted = lpad(batch_index, 2, '0')
 
@@ -182,15 +208,8 @@ function init_batches(batch_sizes::Array{Int})
       @warn "In $MODE mode. Generating specific training dataset for $specific_matrix"
       Plugboard.generate_specific_ode_dataset(training_dataset_setting, batch_index, specific_training_matrix)
     elseif MODE == "RANDOM"
-      Plugboard.generate_random_ode_dataset(training_dataset_setting, batch_index)
+      Plugboard.generate_random_ode_dataset(training_dataset_setting, batch_index; exclude_matrix_keys=held_out_keys, exclude_canonical_keys=held_out_canonical)
     end
-
-    # specific_benchmark_matrix = [1; 1;;]
-
-    Plugboard.generate_random_ode_dataset(benchmark_dataset_setting, 1)
-
-    # Benchmark always uses the specific test matrix for consistent evaluation
-    # Plugboard.generate_specific_ode_dataset(benchmark_dataset_setting, 1, specific_benchmark_matrix)
   end
 end
 
@@ -267,6 +286,6 @@ function run_training_sequence(batch_sizes::Array{Int})
   end
 end
 
-batch = [1000]
+batch = [parsed_args["train-size"]]
 
 run_training_sequence(batch)
