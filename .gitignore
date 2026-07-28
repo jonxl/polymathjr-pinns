@@ -13,3 +13,9 @@ data/*.gif
 # provisional / archived experiments -- keep local, not pushed
 scripts/experimental/
 scripts/archive/
+
+# presentation drafts / binaries -- keep local (only README.md is tracked)
+/*.md
+!/README.md
+*.html
+*.key
