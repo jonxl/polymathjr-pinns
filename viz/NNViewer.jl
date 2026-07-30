@@ -1,36 +1,36 @@
-# Interactive PINN ODE training results visualizer, backed by GLMakie.
+# ===================================================================
+# Interactive PINN ODE training-results viewer, backed by GLMakie.
 #
-# view(results_json, loss_csv) opens one window with:
+#   view(results_json, loss_csv; theme, …)
 #
-#   - 4x2 grid of diagnostic plots: solution comparison, solution error,
-#     coefficient comparison, coefficient error, total/bc/pde/supervised loss.
-#   - A slider that scrubs through training iterations — non-loss plots
-#     update from the nearest milestone snapshot; loss curves show the
-#     full history with a vertical indicator at the current iteration.
+# Opens one GLMakie window with:
 #
-# This replaces the Python nn-viewer (matplotlib + PyQt5) with a
-# native Julia + GLMakie implementation.
+#   • 4×2 grid of diagnostic plots — solution comparison, solution
+#     error, coefficient comparison, coefficient error, total / BC /
+#     PDE / supervised loss.
+#   • Two iteration-range sliders (start, end) so loss curves are
+#     windowed between start … end and the right handle selects the
+#     milestone snapshot used for non-loss plots.
 #
-# Every Makie name is qualified with GLMakie. — Plots (loaded by
-# viz/Viz.jl) exports clashing names like heatmap!/lines!.
-#
-# Run from a Julia session that has GLMakie available:
-#   include("pinns/viz/NNViewer.jl")
-#   NNViewer.view("results/training_results.json", "results/loss.csv")
+# This is the Julia + GLMakie port of the Python nn-viewer
+# (matplotlib + PyQt5 → ODEResultsVisualizer / GeneralizedVisualizer).
+# ===================================================================
 
 module NNViewer
 
-import GLMakie
+using GLMakie
 using JSON
 using CSV
 using DataFrames
 using Printf
+using Statistics: median
 
-# Palette (matching the Python nn-viewer colours for familiarity)
-const BENCHMARK_COLOR = "#4fc3f7"
-const PINN_COLOR      = "#ff8a65"
+# ---- data-series palette (matching the Python nn-viewer) -----------
+
+const BENCHMARK_COLOR  = "#4fc3f7"
+const PINN_COLOR       = "#ff8a65"
 const ANALYTICAL_COLOR = "#66bb6a"
-const ERROR_COLOR     = "#ef5350"
+const ERROR_COLOR      = "#ef5350"
 const LOSS_COLORS = Dict(
     "total"      => "#e0e0e0",
     "bc"         => "#ef5350",
@@ -39,63 +39,108 @@ const LOSS_COLORS = Dict(
 )
 const MARKER_COLOR = "#ffeb3b"
 
-# ---- factorial power-series evaluation -----------------------------------
+# ---- axis styling helper -------------------------------------------
+
+function style_axis!(ax, theme)
+    t  = GLMakie.to_color
+    ax.backgroundcolor = t(theme.bg_secondary)
+    ax.xgridcolor      = t(theme.grid_color)
+    ax.ygridcolor      = t(theme.grid_color)
+    ax.xlabelcolor     = t(theme.text_primary)
+    ax.ylabelcolor     = t(theme.text_primary)
+    ax.xtickcolor      = t(theme.text_primary)
+    ax.ytickcolor      = t(theme.text_primary)
+    ax.titlecolor      = t(theme.text_primary)
+    ax.xgridvisible    = true
+    ax.ygridvisible    = true
+    ax.xgridwidth      = 0.5
+    ax.ygridwidth      = 0.5
+    return ax
+end
+
+# ---- factorial power-series evaluation -----------------------------
 #
-# u(x) = Σ coeffᵢ · xⁱ⁻¹ / (i−1)!   (i ∈ 1:N)
+#  u(x) = Σ  coeffᵢ · xⁱ⁻¹ / (i−1)!    (i ∈ 1:N, Julia indexing)
 #
-# Equivalent to the Python version:
+# Matches the Python version:
 #     sum(coeff[i] * x^i / factorial(i))   (i ∈ 0:N−1)
-# because Julia is 1-indexed and Python 0-indexed, and both divide by
-# the same factorial value for the corresponding term.
-# --------------------------------------------------------------------------
-function evaluate_factorial_power_series(coeffs::Vector{Float64}, x::AbstractVector)
+# -------------------------------------------------------------------
+
+function evaluate_factorial_power_series(coeffs::Vector{Float64},
+                                         x::AbstractVector)
     result = zeros(Float64, length(x))
+    fact = 1.0                     # 0! = 1
     for (i, c) in enumerate(coeffs)
-        result .+= c .* (x .^ (i - 1)) ./ factorial(i - 1)
+        result .+= c .* (x .^ (i - 1)) ./ fact
+        fact *= i                   # fact = i! for the next term
     end
     return result
 end
 
-# ---- public entry point --------------------------------------------------
+# ---- public entry point -------------------------------------------
 
 """
-    view(results_json_path::String, loss_csv_path::String;
-         x_range=(0.0, 1.0), num_points=1000, initial_iteration=1000)
+    view(results_json_path, loss_csv_path;
+         theme        = DARK_THEME,
+         x_range      = (0.0, 1.0),
+         num_points   = 1000,
+         initial_start = nothing,
+         initial_end   = 1000)
 
 Open an interactive GLMakie window for exploring PINN training results.
 
-`results_json_path` should point to a `training_results.json` file
-(metadata + milestones format as written by `training_schemes.jl`).
-`loss_csv_path` should point to `loss.csv` (iter, total, bc, pde,
-supervised columns).
+# Arguments
+- `results_json_path` — path to `training_results.json`
+  (metadata + milestones, as written by `training_schemes.jl`).
+- `loss_csv_path` — path to `loss.csv`
+  (iteration, total, bc, pde, supervised columns).
+
+# Keyword arguments
+- `theme`          — `VizTheme` (Theme.jl).
+- `x_range`        — evaluation x-domain as `(lo, hi)`.
+- `num_points`     — number of collocation points.
+- `initial_start`  — initial left-handle iteration  (default: auto).
+- `initial_end`    — initial right-handle iteration (default: 1000).
 """
 function view(results_json_path::String, loss_csv_path::String;
-              x_range=(0.0, 1.0), num_points=1000,
-              initial_iteration=1000)
+              theme::Any = nothing,
+              x_range = (0.0, 1.0), num_points::Int = 1000,
+              initial_start = nothing,
+              initial_end = 1000)
 
-    # ---- load training_results.json --------------------------------------
+    # ---- load training_results.json ---------------------------------
     data = JSON.parsefile(results_json_path)
-    metadata   = data["metadata"]
-    milestones = data["milestones"]
-    benchmark_coeffs = Float64.(metadata["benchmark_coefficients"])
-    ode_matrix       = Float64.(metadata["ode_matrix"])
+    metadata   = get(data, "metadata", Dict())
+    milestones = get(data, "milestones", [])
 
-    # iteration → snapshot lookup
+    benchmark_coeffs = haskey(metadata, "benchmark_coefficients") ?
+        Float64.(metadata["benchmark_coefficients"]) : Float64[]
+    n_bench = length(benchmark_coeffs)
+
     iter_to_snapshot = Dict{Int,Dict}()
     for m in milestones
         iter_to_snapshot[Int(m["iteration"])] = m
     end
     milestone_iters = sort(collect(keys(iter_to_snapshot)))
 
-    # ---- load loss CSV ---------------------------------------------------
-    df = CSV.read(loss_csv_path, DataFrame)
-    loss_iters      = Vector{Int}(df[!, :iteration])
-    loss_total      = Vector{Float64}(df[!, :total])
-    loss_bc         = Vector{Float64}(df[!, :bc])
-    loss_pde        = Vector{Float64}(df[!, :pde])
-    loss_supervised = Vector{Float64}(df[!, :supervised])
+    # ---- load loss CSV ---------------------------------------------
+    loss_available = isfile(loss_csv_path)
+    if loss_available
+        df = CSV.read(loss_csv_path, DataFrame)
+        loss_iters      = Vector{Int}(df[!, :iteration])
+        loss_total      = Vector{Float64}(df[!, :total])
+        loss_bc         = Vector{Float64}(df[!, :bc])
+        loss_pde        = Vector{Float64}(df[!, :pde])
+        loss_supervised = Vector{Float64}(df[!, :supervised])
+    else
+        loss_iters       = Int[]
+        loss_total       = Float64[]
+        loss_bc          = Float64[]
+        loss_pde         = Float64[]
+        loss_supervised  = Float64[]
+    end
 
-    # ---- iteration range & slider step -----------------------------------
+    # ---- iteration range & slider step -----------------------------
     if !isempty(milestone_iters) && !isempty(loss_iters)
         iter_min = min(milestone_iters[1], loss_iters[1])
         iter_max = max(milestone_iters[end], loss_iters[end])
@@ -107,9 +152,9 @@ function view(results_json_path::String, loss_csv_path::String;
         iter_max = loss_iters[end]
     else
         iter_min = 0
-        iter_max = max(initial_iteration, 2000)
+        iter_max = max(initial_end, 2000)
     end
-    init_val = clamp(initial_iteration, iter_min, iter_max)
+
     iter_step = if length(loss_iters) > 1
         max(1, Int(round(median(diff(loss_iters)))))
     elseif length(milestone_iters) > 1
@@ -118,14 +163,24 @@ function view(results_json_path::String, loss_csv_path::String;
         100
     end
 
-    # ---- precompute static evaluation data --------------------------------
-    x_eval = collect(range(x_range[1], x_range[2]; length=num_points))
-    benchmark_series = evaluate_factorial_power_series(benchmark_coeffs, x_eval)
-    n_bench = length(benchmark_coeffs)
+    if initial_start === nothing
+        initial_start = iter_min
+    end
+    init_s = clamp(initial_start, iter_min, iter_max)
+    init_e = clamp(initial_end,   iter_min, iter_max)
+    if init_s >= init_e
+        init_s = max(iter_min, init_e - iter_step)
+    end
 
-    # ---- helpers ----------------------------------------------------------
+    slider_range = iter_min:iter_step:iter_max
 
-    # Latest milestone snapshot at or before `iteration`
+    # ---- precompute static evaluation data --------------------------
+    x_eval = collect(range(x_range[1], x_range[2]; length = num_points))
+    benchmark_series = isempty(benchmark_coeffs) ?
+        zeros(length(x_eval)) :
+        evaluate_factorial_power_series(benchmark_coeffs, x_eval)
+
+    # ---- helpers ----------------------------------------------------
     function get_snapshot(iteration)
         snap = nothing
         for it in milestone_iters
@@ -134,26 +189,42 @@ function view(results_json_path::String, loss_csv_path::String;
         return snap
     end
 
-    # ---- GLMakie window ---------------------------------------------------
-
+    # ---- GLMakie window ---------------------------------------------
     GLMakie.activate!()
     fig = GLMakie.Figure(size = (1920, 1200))
 
-    # Iteration slider
-    sl = GLMakie.Slider(fig[8, 1:4];
-                        range = iter_min:iter_step:iter_max,
-                        startvalue = init_val)
-    it_obs = sl.value
+    # ---- theme application ------------------------------------------
+    c_primary    = (theme === nothing) ? :white    : GLMakie.to_color(theme.text_primary)
+    c_secondary  = (theme === nothing) ? :gray70  : GLMakie.to_color(theme.text_secondary)
+    if theme !== nothing
+        fig.scene.backgroundcolor = GLMakie.to_color(theme.bg_primary)
+    end
 
-    # Title bar
-    GLMakie.Label(fig[1, 1:4],
-        GLMakie.lift(it -> @sprintf(
-            "PINN ODE Training Analysis  —  iteration %d  (0 … %d)",
-            it, iter_max), it_obs),
-        fontsize = 20, font = :bold, halign = :center)
+    # ---- iteration range slider (single bar, two handles) ------------
+    sl = GLMakie.IntervalSlider(fig[8, 1:4];
+                                range = slider_range,
+                                startvalues = (init_s, init_e))
+    interval_obs = sl.interval
+    iter_s_obs = GLMakie.lift(v -> Int(round(v[1])), interval_obs)
+    iter_e_obs = GLMakie.lift(v -> Int(round(v[2])), interval_obs)
 
-    # Reactive data driven by the slider
-    snap_obs = GLMakie.lift(get_snapshot, it_obs)
+    GLMakie.Label(fig[7, 1:4],
+                  GLMakie.lift(iter_s_obs, iter_e_obs) do s, e
+                      @sprintf("Iteration Range:  %d  —  %d", s, e)
+                  end,
+                  fontsize = 12, halign = :center, color = c_primary)
+
+    # ---- title bar --------------------------------------------------
+    title_str = GLMakie.lift(iter_e_obs) do it
+        @sprintf("PINN ODE Training Analysis  —  iteration %d  (0 … %d)",
+                 it, iter_max)
+    end
+    GLMakie.Label(fig[1, 1:4], title_str;
+                  fontsize = 20, font = :bold, halign = :center,
+                  color = c_primary)
+
+    # ---- reactive data driven by the END slider ---------------------
+    snap_obs = GLMakie.lift(get_snapshot, iter_e_obs)
 
     pinn_coeffs_obs = GLMakie.lift(snap_obs) do snap
         snap === nothing && return Float64[]
@@ -165,13 +236,10 @@ function view(results_json_path::String, loss_csv_path::String;
         return evaluate_factorial_power_series(pc, x_eval)
     end
 
-    # Number of coefficients to compare (min of benchmark & PINN)
     n_compare_obs = GLMakie.lift(pc -> min(n_bench, length(pc)), pinn_coeffs_obs)
+    coeff_idx_obs = GLMakie.lift(n -> Float64.(0:(max(0, n - 1))), n_compare_obs)
 
-    # coeff indices the PINN line will use (0 … n−1)
-    coeff_idx_obs = GLMakie.lift(n -> Float64.(0:(n - 1)), n_compare_obs)
-
-    # === Plots row 3: solution comparison + solution error ================
+    # ---- Row 3: solution comparison + solution error ----------------
     ax1 = GLMakie.Axis(fig[3, 1:2];
                        title = "ODE Solution Comparison",
                        xlabel = "x", ylabel = "u(x)")
@@ -186,23 +254,26 @@ function view(results_json_path::String, loss_csv_path::String;
     ax2 = GLMakie.Axis(fig[3, 3:4];
                        title = "Absolute Error of Solution",
                        xlabel = "x", ylabel = "|Error|",
-                       yscale = Makie.log10)
+                       yscale = GLMakie.log10)
     abs_error_obs = GLMakie.lift(ps -> abs.(benchmark_series .- ps),
                                  pinn_series_obs)
     GLMakie.lines!(ax2, x_eval, abs_error_obs;
                    color = ERROR_COLOR, linewidth = 2)
 
-    # === Plots row 4: coefficient comparison + coefficient error ==========
+    if theme !== nothing
+        style_axis!(ax1, theme)
+        style_axis!(ax2, theme)
+    end
+
+    # ---- Row 4: coefficient comparison + coefficient error ----------
     ax3 = GLMakie.Axis(fig[4, 1:2];
                        title = "Coefficient Comparison",
                        xlabel = "Coefficient Index",
                        ylabel = "Coefficient Value")
-    # Benchmark (static — does not change with slider)
-    bench_idx_full = Float64.(0:(n_bench - 1))
+    bench_idx_full = Float64.(0:(max(0, n_bench - 1)))
     GLMakie.lines!(ax3, bench_idx_full, benchmark_coeffs;
                    color = BENCHMARK_COLOR, linewidth = 2,
                    label = "Benchmark")
-    # PINN (reactive — truncates to min length)
     pinn_y_slice_obs = GLMakie.lift(pinn_coeffs_obs, n_compare_obs) do pc, n
         n == 0 && return Float64[]
         return pc[1:n]
@@ -216,7 +287,7 @@ function view(results_json_path::String, loss_csv_path::String;
                        title = "Coefficient Error",
                        xlabel = "Coefficient Index",
                        ylabel = "|Error|",
-                       yscale = Makie.log10)
+                       yscale = GLMakie.log10)
     coeff_err_obs = GLMakie.lift(pinn_coeffs_obs, n_compare_obs) do pc, n
         n == 0 && return Float64[]
         return abs.(benchmark_coeffs[1:n] .- pc[1:n])
@@ -224,39 +295,70 @@ function view(results_json_path::String, loss_csv_path::String;
     GLMakie.lines!(ax4, coeff_idx_obs, coeff_err_obs;
                    color = ERROR_COLOR, linewidth = 2)
 
-    # === Plots rows 5–6: loss curves (full history, log y) ================
+    if theme !== nothing
+        style_axis!(ax3, theme)
+        style_axis!(ax4, theme)
+    end
 
+    # ---- Rows 5–6: loss curves (full history + window highlight) ----
     function loss_axis(parent, title, loss_vec, color)
         ax = GLMakie.Axis(parent;
                           title = title,
                           xlabel = "Iteration",
                           ylabel = "Loss",
-                          yscale = Makie.log10)
-        GLMakie.lines!(ax, loss_iters, loss_vec;
-                       color = color, linewidth = 1.2)
-        GLMakie.vlines!(ax, it_obs;
-                        color = (MARKER_COLOR, 0.6), linewidth = 2)
+                          yscale = GLMakie.log10)
+        if !isempty(loss_vec)
+            GLMakie.lines!(ax, loss_iters, loss_vec;
+                           color = color, linewidth = 1.2)
+        end
+        GLMakie.vspan!(ax, iter_s_obs, iter_e_obs;
+                       color = (MARKER_COLOR, 0.12))
+        GLMakie.vlines!(ax, iter_s_obs;
+                        color = (MARKER_COLOR, 0.35), linewidth = 1.5,
+                        linestyle = :dash)
+        GLMakie.vlines!(ax, iter_e_obs;
+                        color = (MARKER_COLOR, 0.60), linewidth = 2)
+        if theme !== nothing
+            style_axis!(ax, theme)
+        end
         return ax
     end
 
-    loss_axis(fig[5, 1:2], "Total Loss",      loss_total,      LOSS_COLORS["total"])
-    loss_axis(fig[5, 3:4], "BC Loss",         loss_bc,         LOSS_COLORS["bc"])
-    loss_axis(fig[6, 1:2], "PDE Loss",        loss_pde,        LOSS_COLORS["pde"])
-    loss_axis(fig[6, 3:4], "Supervised Loss", loss_supervised, LOSS_COLORS["supervised"])
+    if loss_available
+        loss_axis(fig[5, 1:2], "Total Loss",      loss_total,      LOSS_COLORS["total"])
+        loss_axis(fig[5, 3:4], "BC Loss",         loss_bc,         LOSS_COLORS["bc"])
+        loss_axis(fig[6, 1:2], "PDE Loss",        loss_pde,        LOSS_COLORS["pde"])
+        loss_axis(fig[6, 3:4], "Supervised Loss", loss_supervised, LOSS_COLORS["supervised"])
+    else
+        for (ri, ci, ttl) in [(5, 1, "Total Loss"), (5, 3, "BC Loss"),
+                              (6, 1, "PDE Loss"),  (6, 3, "Supervised Loss")]
+            ax = GLMakie.Axis(fig[ri, ci:(ci + 1)];
+                              title = ttl, xlabel = "Iteration",
+                              ylabel = "Loss", yscale = GLMakie.log10)
+            GLMakie.text!(ax, 0.5, 0.5; text = "(no loss CSV)",
+                          align = (:center, :center), color = c_secondary,
+                          fontsize = 14)
+            if theme !== nothing
+                style_axis!(ax, theme)
+            end
+        end
+    end
 
-    # ---- Status bar -------------------------------------------------------
-    GLMakie.Label(fig[7, 1:4],
+    # ---- status bar -------------------------------------------------
+    GLMakie.Label(fig[9, 1:4],
         GLMakie.lift(snap_obs) do snap
             snap === nothing && return "No snapshot at this iteration."
-            it = snap["iteration"]
+            it  = snap["iteration"]
             obj = snap["objective"]
             return @sprintf("Snapshot  iteration %d  |  objective = %.6e", it, obj)
         end,
-        fontsize = 11, halign = :left, color = :gray70)
+        fontsize = 11, halign = :left, color = c_secondary)
 
-    # ---- Row / column sizing ---------------------------------------------
-    GLMakie.rowsize!(fig.layout, 1, 36)
-    GLMakie.rowsize!(fig.layout, 8, 36)
+    # ---- row / column sizing ----------------------------------------
+    GLMakie.rowsize!(fig.layout, 1, 36)    # title
+    GLMakie.rowsize!(fig.layout, 8, 36)    # interval slider
+    GLMakie.rowsize!(fig.layout, 9, 24)    # status
+
     GLMakie.colgap!(fig.layout, 16)
     GLMakie.rowgap!(fig.layout, 8)
 

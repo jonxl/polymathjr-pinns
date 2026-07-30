@@ -1,11 +1,10 @@
 # Installation
 
-Set up Julia (backend) and Python (visualization) environments.
+Set up Julia environment for training and diagnostics.
 
 ## Prerequisites
 
 - Julia 1.9+
-- Python 3.14+
 - Git
 
 ---
@@ -36,7 +35,8 @@ Key packages installed:
 | OptimizationOptimisers | Adam optimizer |
 | Zygote | Automatic differentiation |
 | JSON, CSV | Data I/O |
-| Plots | Visualization |
+| GLMakie | Interactive diagnostics dashboard |
+| Plots | Static visualization |
 | TaylorSeries | Power series operations |
 | CUDA | GPU acceleration (auto-detected) |
 
@@ -44,17 +44,6 @@ Key packages installed:
 
 ```bash
 julia --project=. -e 'using Lux, Optimization; println("Success!")'
-```
-
----
-
-## Python Setup
-
-```bash
-cd scripts
-python -m venv .venv
-source .venv/bin/activate
-pip install numpy matplotlib
 ```
 
 ---

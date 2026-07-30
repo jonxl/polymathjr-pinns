@@ -5,7 +5,8 @@
 ```
 polymathjr-pinns-jon-jeet/
 ├── src/
-│   └── main.jl                 # Entry point
+│   ├── main.jl                 # Training entry point
+│   └── explore.jl              # Diagnostics dashboard entry point
 ├── architectures/
 │   ├── PINN.jl                 # Core feedforward PINN
 │   ├── PINN_RNN.jl             # RNN-based variant
@@ -19,13 +20,16 @@ polymathjr-pinns-jon-jeet/
 │   ├── ProgressBar.jl          # Progress tracking
 │   ├── binary_search_on_weights.jl
 │   └── two_d_grid_search_*.jl  # Hyperparameter search
-├── scripts/
-│   ├── main.py                 # Python examples
-│   └── visualizer.py           # Interactive visualization
+├── viz/
+│   ├── Viz.jl                  # Dashboard module (top-level)
+│   ├── Theme.jl                # Colour themes (dark/light/high-contrast)
+│   └── NNViewer.jl             # Interactive GLMakie PINN viewer
 ├── data/
 │   ├── training_dataset.json
 │   ├── benchmark_dataset.json
 │   └── training-run-*/         # Output directories
+├── results/
+│   └── run-adam-*/             # Training run outputs
 ├── docs/                       # Documentation
 ├── Project.toml                # Julia dependencies
 └── README.md
@@ -38,11 +42,14 @@ polymathjr-pinns-jon-jeet/
 | File | Purpose |
 |------|---------|
 | `src/main.jl` | Orchestrates training runs |
+| `src/explore.jl` | Launches interactive diagnostics dashboard |
 | `architectures/PINN.jl` | Core PINN with `PINNSettings`, `train_pinn()`, `global_loss()` |
 | `utils/plugboard.jl` | Generates ODEs and computes power series coefficients |
 | `utils/loss_functions.jl` | PDE, BC, supervised loss functions |
 | `utils/gpu_utils.jl` | GPU detection, device transfer utilities |
-| `scripts/visualizer.py` | `GeneralizedVisualizer`, `PowerSeriesVisualizer` classes |
+| `viz/Viz.jl` | Top-level dashboard module (`Viz.explore()`) |
+| `viz/NNViewer.jl` | Interactive GLMakie PINN results viewer |
+| `viz/Theme.jl` | Colour theme system (dark, light, high-contrast) |
 
 ---
 

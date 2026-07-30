@@ -32,16 +32,6 @@ See the [CLI Reference](cli-reference.md) for all available flags.
 
 ## Output Structure
 
-```
-data/training-run-1/
-├── batch-01/
-│   ├── iteration_output.csv    # Loss history
-│   ├── solution_plot.png       # Solution comparison
-│   ├── coefficient_plot.png    # Coefficient comparison
-│   └── error_plot.png          # Error analysis
-└── metadata.json
-```
-
 Current training runs write under `results/run-{id}/`:
 
 ```
@@ -57,23 +47,32 @@ results/run-adam-MM-DD-YY/
 
 ## View Results
 
-### Loss CSV Format
-
-```csv
-loss_type,iter_1,iter_2,...
-total_loss,0.95,0.82,...
-total_loss_bc,0.30,0.25,...
-total_loss_pde,0.50,0.42,...
-total_loss_supervised,0.15,0.15,...
-```
-
-### Interactive Visualization
+### Interactive Dashboard
 
 ```bash
-cd scripts
-source .venv/bin/activate
-python main.py
+# Auto-detect latest run
+julia --project src/explore.jl
+
+# Specify run paths
+julia --project src/explore.jl results/run-adam-06-03-26/training_results.json results/run-adam-06-03-26/loss.csv
+
+# Light theme
+julia --project src/explore.jl --theme light
+
+# Show help
+julia --project src/explore.jl --help
 ```
+
+The dashboard opens an interactive GLMakie window with:
+
+- **Solution Comparison** — benchmark vs PINN power series
+- **Absolute Error** — pointwise solution error (log scale)
+- **Coefficient Comparison** — benchmark vs PINN coefficients
+- **Coefficient Error** — per-coefficient absolute error (log scale)
+- **4 Loss Curves** — total, BC, PDE, supervised loss over training
+- **Iteration Range Slider** — single bar with two handles (start, end)
+
+Closing the window automatically exits the Julia process.
 
 ---
 

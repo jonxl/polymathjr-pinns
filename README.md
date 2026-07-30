@@ -12,12 +12,14 @@ Instead of learning the solution function directly, this PINN outputs the coeffi
 - **Multi-Loss Training**: Combines PDE residual, boundary conditions, and supervised losses
 - **GPU Acceleration**: Auto-detects CUDA GPUs, falls back to CPU transparently
 - **Adam + LBFGS Optimization**: Adam active; LBFGS under investigation for convergence tuning
-- **Interactive Visualization**: Python dashboard for analyzing results (oooooo....)
+- **Interactive Visualization**: Native Julia + GLMakie dashboard for analyzing results
 
 ## Project Structure
 
 ```
-├── src/main.jl              # Entry point
+├── src/
+│   ├── main.jl              # Training entry point
+│   └── explore.jl            # Diagnostics dashboard
 ├── architectures/
 │   ├── PINN.jl              # Core PINN implementation
 │   ├── PINN_RNN.jl          # RNN-based variant
@@ -27,9 +29,10 @@ Instead of learning the solution function directly, this PINN outputs the coeffi
 │   ├── loss_functions.jl    # Loss computation
 │   ├── gpu_utils.jl         # GPU detection and device transfers
 │   └── ...                  # Other utilities
-├── scripts/
-│   ├── visualizer.py        # Interactive visualization
-│   └── main.py              # Python examples
+├── viz/
+│   ├── Viz.jl               # Dashboard module
+│   ├── Theme.jl             # Colour themes (dark/light/high-contrast)
+│   └── NNViewer.jl          # Interactive GLMakie viewer
 ├── data/                    # Datasets and outputs
 └── docs/                    # Full documentation
 ```
@@ -70,15 +73,20 @@ Full documentation is available in the [`docs/`](docs/README.md) directory:
 3. **Loss Function**: Combines PDE residual, boundary conditions, and supervised coefficient loss
 4. **Evaluation**: Compares predicted vs true coefficients on benchmark ODE
 
-## Python Visualization
+## Diagnostics Dashboard
 
 ```bash
-cd scripts
-python -m venv .venv
-source .venv/bin/activate
-pip install numpy matplotlib
-python main.py
+# Launch the interactive GLMakie dashboard
+julia --project src/explore.jl
+
+# With a specific run
+julia --project src/explore.jl results/run-adam-06-03-26/training_results.json results/run-adam-06-03-26/loss.csv
+
+# Choose a colour theme
+julia --project src/explore.jl --theme light
 ```
+
+The dashboard shows 8 diagnostic plots (solution comparison, coefficient analysis, loss curves) with an interactive iteration range slider.
 
 ## Technology Stack
 
@@ -89,7 +97,7 @@ python main.py
 | Optimization | Optimization.jl (Adam active, LBFGS planned) |
 | Autodiff | Zygote.jl |
 | GPU | CUDA.jl (auto-detected) |
-| Visualization | Python / Matplotlib |
+| Visualization | Julia / GLMakie.jl |
 
 ## License
 

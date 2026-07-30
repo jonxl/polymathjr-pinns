@@ -11,7 +11,7 @@ This project implements a PINN that learns power series coefficients to approxim
 ## Quick Navigation
 
 ### Getting Started
-- [Installation](getting-started/installation.md) - Julia & Python setup
+- [Installation](getting-started/installation.md) - Julia setup
 - [Quickstart](getting-started/quickstart.md) - First training run
 - [CLI Reference](getting-started/cli-reference.md) - Command-line flags
 - [Project Structure](getting-started/project-structure.md) - Codebase layout
@@ -29,9 +29,10 @@ This project implements a PINN that learns power series coefficients to approxim
 - [helper_funcs.jl](julia-modules/helper-funcs.md) - Utilities
 - [training_schemes.jl](julia-modules/training-schemes.md) - Training strategies
 
-### Python Modules
-- [visualizer.py](python-modules/visualizer.md) - Interactive visualization
-- [main.py](python-modules/main-examples.md) - Examples
+### Viz Modules
+- [Viz.jl](viz-modules/viz.md) - Dashboard module
+- [Theme.jl](viz-modules/theme.md) - Colour themes
+- [NNViewer.jl](viz-modules/nnviewer.md) - Interactive GLMakie viewer
 
 ### Concepts
 - [Hyperparameter Tuning](concepts/hyperparameter-tuning.md) - Tuning strategies
@@ -49,7 +50,7 @@ This project implements a PINN that learns power series coefficients to approxim
 
 ### Tutorials
 - [Hyperparameter Search](tutorials/hyperparameter-search.md) - Grid/binary search
-- [Visualization Guide](tutorials/visualization-guide.md) - Python dashboard
+- [Visualization Guide](tutorials/visualization-guide.md) - GLMakie dashboard
 - [Scaling Experiments](tutorials/scaling-experiments.md) - Neuron/iteration studies
 
 ---
@@ -62,7 +63,7 @@ This project implements a PINN that learns power series coefficients to approxim
 | Neural Networks | Lux.jl |
 | Optimization | Optimization.jl (Adam, LBFGS) |
 | Autodiff | Zygote.jl |
-| Visualization | Python 3.14+ / Matplotlib |
+| Visualization | Julia 1.9+ / GLMakie.jl |
 
 ---
 

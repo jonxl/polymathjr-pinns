@@ -1,10 +1,10 @@
 # CLI Reference
 
-Runtime configuration for `src/main.jl` via command-line flags.
+Runtime configuration via command-line flags.
 
 ---
 
-## Usage
+## Training (`src/main.jl`)
 
 ```bash
 julia --project src/main.jl [FLAGS]
@@ -54,6 +54,38 @@ julia --project src/main.jl --gen-data --data RANDOM
 
 # Threaded grid search
 julia --project -t auto src/main.jl --mode GRID_SEARCH
+```
+
+---
+
+## Diagnostics Dashboard (`src/explore.jl`)
+
+### Usage
+
+```bash
+julia --project src/explore.jl [RESULTS_JSON] [LOSS_CSV] [--theme THEME]
+```
+
+### Arguments
+
+| Argument | Required | Description |
+|----------|----------|-------------|
+| `RESULTS_JSON` | No | Path to `training_results.json`. Auto-detected from `results/` if omitted. |
+| `LOSS_CSV` | No | Path to `loss.csv`. Auto-detected from same run as JSON if omitted. |
+| `--theme NAME` | No | Colour theme: `dark` (default), `light`, `high_contrast` |
+| `--help` / `-h` | No | Show help text |
+
+### Examples
+
+```bash
+# Auto-detect latest run (dark theme)
+julia --project src/explore.jl
+
+# Specify exact paths
+julia --project src/explore.jl results/run-adam-07-23-26/training_results.json results/run-adam-07-23-26/loss.csv
+
+# Light theme
+julia --project src/explore.jl --theme light
 ```
 
 ---

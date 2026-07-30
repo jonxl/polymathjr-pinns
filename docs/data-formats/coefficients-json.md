@@ -27,10 +27,12 @@ Format for storing predicted coefficients for visualization.
 
 ## Purpose
 
-Used by Python visualizer to:
-- Compare predictions across network sizes
-- Enable slider-based exploration
-- Generate comparison plots
+Used by the `Viz` diagnostic dashboard to:
+- Compare predictions across training snapshots
+- Enable iteration-range slider exploration
+- Generate solution and coefficient comparison plots
+
+The dashboard reads coefficients from `training_results.json` (`milestones[].coefficients` and `metadata.benchmark_coefficients`), not from a standalone coefficients file.
 
 ---
 
@@ -52,33 +54,38 @@ JSON.write("coefficients.json", results)
 
 ---
 
-## Loading in Python
+## Loading in Julia
 
-```python
-import json
+```julia
+using JSON
 
-with open('coefficients.json', 'r') as f:
-    predicted = json.load(f)
+data = JSON.parsefile("training_results.json")
+benchmark = data["metadata"]["benchmark_coefficients"]
 
-# Convert keys to integers if needed
-predicted = {int(k): v for k, v in predicted.items()}
+for m in data["milestones"]
+    it = m["iteration"]
+    coeffs = m["coefficients"]
+    # ...
+end
 ```
 
 ---
 
-## Integration with Visualizer
+## Integration with Dashboard
 
-```python
-from visualizer import PowerSeriesVisualizer
+```bash
+julia --project src/explore.jl results/run-adam-07-23-26/training_results.json results/run-adam-07-23-26/loss.csv
+```
 
-viz = PowerSeriesVisualizer(
-    predicted_coeffs=predicted,
-    true_coeffs=benchmark_coeffs,
-    neuron_counts=[10, 20, 50, 100]
-)
-viz.show()
+Or from the REPL:
+
+```julia
+include("viz/Viz.jl")
+using .Viz
+Viz.explore("results/run-adam-07-23-26/training_results.json",
+            "results/run-adam-07-23-26/loss.csv")
 ```
 
 ---
 
-*See also: [visualizer.py](../python-modules/visualizer.md), [Scaling Experiments](../tutorials/scaling-experiments.md)*
+*See also: [Viz.jl](../viz-modules/viz.md), [Visualization Guide](../tutorials/visualization-guide.md)*
