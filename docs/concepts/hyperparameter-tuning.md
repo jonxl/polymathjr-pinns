@@ -14,7 +14,6 @@ Strategies for optimizing PINN training parameters.
 | `num_supervised` | Supervised coefficients | 0 - N/2 |
 | `num_points` | Collocation points | 10 - 100 |
 | `supervised_weight` | Supervision strength | 0.0 - 1.0 |
-| `bc_weight` | BC loss weight | 0.1 - 10.0 |
 | `pde_weight` | PDE loss weight | 0.1 - 10.0 |
 
 ---

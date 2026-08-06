@@ -29,7 +29,6 @@ struct TrainingSchemesSettings
   x_left::Float32
   x_right::Float32
   supervised_weight::Float32
-  bc_weight::Float32
   pde_weight::Float32
   xs::Vector{Float32}
 end
@@ -41,7 +40,7 @@ function scaling_neurons(settings::TrainingSchemesSettings, neurons_counts::Dict
     for (run_idx, inner_dict) in settings.training_dataset
       converted_dict = convert_plugboard_keys(inner_dict)
 
-      pinn_settings = PINNSettings(neuron_count, 1234, converted_dict, 500, settings.num_supervised, settings.N, settings.num_points, settings.x_left, settings.x_right, settings.supervised_weight, settings.bc_weight, settings.pde_weight, settings.xs, "adam")
+      pinn_settings = PINNSettings(neuron_count, 1234, converted_dict, 500, settings.N, settings.num_supervised, settings.num_points, settings.x_left, settings.x_right, settings.supervised_weight, settings.pde_weight, settings.xs, "adam")
 
       run_id = generate_run_id(pinn_settings.optimizer)
       output_dir = joinpath("results", "run-$run_id")
@@ -56,7 +55,7 @@ function scaling_neurons(settings::TrainingSchemesSettings, neurons_counts::Dict
 end
 
 ## Unified training path — train once, evaluate at milestones.
-function run_training(settings::TrainingSchemesSettings, maxiters::Int, milestone_interval::Int; snapshot_path::Union{String,Nothing}=nothing, batch_size::Int=0, snapshot_epoch_interval::Int=10, neuron_count::Int=100, seed::Int=1234)
+function run_training(settings::TrainingSchemesSettings, maxiters::Int, milestone_interval::Int; snapshot_path::Union{String,Nothing}=nothing, batch_size::Int=0, snapshot_epoch_interval::Int=10, neuron_count::Int=100, seed::Int=1234, representation::Symbol=:power_series)
   for (run_idx, inner_dict) in settings.training_dataset
     converted_dict = convert_plugboard_keys(inner_dict)
 
@@ -66,10 +65,13 @@ function run_training(settings::TrainingSchemesSettings, maxiters::Int, mileston
       float_dict[Float32.(mat)] = series
     end
 
-    pinn_settings = PINNSettings(neuron_count, seed, float_dict, maxiters, settings.num_supervised, settings.N, settings.num_points, settings.x_left, settings.x_right, settings.supervised_weight, settings.bc_weight, settings.pde_weight, settings.xs, "adam")
+    pinn_settings = PINNSettings(neuron_count, seed, float_dict, maxiters, settings.N, settings.num_supervised, settings.num_points, settings.x_left, settings.x_right, settings.supervised_weight, settings.pde_weight, settings.xs, "adam", representation)
 
-    # Generate run_id upfront so the output directory is known before training
-    run_id = generate_run_id(pinn_settings.optimizer)
+    # Generate run_id upfront so the output directory is known before training.
+    # Tag eigenvalue runs so results/ directories are self-describing; power-series
+    # runs keep their historical naming.
+    run_tag = representation === :eigenvalue ? "$(pinn_settings.optimizer)-eig" : pinn_settings.optimizer
+    run_id = generate_run_id(run_tag)
     output_dir = joinpath("results", "run-$run_id")
     mkpath(output_dir)
 
@@ -84,7 +86,12 @@ function run_training(settings::TrainingSchemesSettings, maxiters::Int, mileston
       mkpath(snapshot_dir)
 
       snapshot_path = joinpath(snapshot_dir, "iter-$(lpad(iteration, 7, '0')).safetensors")
-      save_safetensors_model(snapshot_path, p_current, coeff_net, seed)
+      save_safetensors_model(snapshot_path, p_current, coeff_net, seed;
+        extra_metadata=Dict{String,Any}(
+          "representation" => String(representation),
+          "objective_components" => "pde + supervised",
+          "diagnostic_components" => "bc"
+        ))
 
       error, eval_results = evaluate_solution(pinn_settings, p_current, coeff_net, st, settings.benchmark_dataset["01"], output_dir, run_id; iteration=iteration, write_results_json=false)
       coeffs = length(eval_results) > 0 ? eval_results[end]["pinn_coefficients"] : Float64[]
@@ -103,7 +110,12 @@ function run_training(settings::TrainingSchemesSettings, maxiters::Int, mileston
 
     # Save the final trained MLP weights as the primary Hugging Face artifact.
     final_model_path = joinpath(output_dir, "model.safetensors")
-    save_safetensors_model(final_model_path, p_trained, coeff_net, seed)
+    save_safetensors_model(final_model_path, p_trained, coeff_net, seed;
+      extra_metadata=Dict{String,Any}(
+        "representation" => String(representation),
+        "objective_components" => "pde + supervised",
+        "diagnostic_components" => "bc"
+      ))
 
     # Extract metadata from eval results
     ode_matrix = Float64[]
@@ -128,14 +140,19 @@ function run_training(settings::TrainingSchemesSettings, maxiters::Int, mileston
         "checkpointing_enabled" => checkpointing_enabled,
         "model_file" => "model.safetensors",
         "optimizer" => "adam",
+        "representation" => String(representation),
         "seed" => seed,
         "N" => settings.N,
         "num_supervised" => settings.num_supervised,
         "domain" => [Float64(settings.x_left), Float64(settings.x_right)],
         "weights" => Dict(
           "supervised" => Float64(settings.supervised_weight),
-          "bc" => Float64(settings.bc_weight),
           "pde" => Float64(settings.pde_weight)
+        ),
+        "objective" => Dict(
+          "optimized_components" => ["pde", "supervised"],
+          "diagnostic_components" => ["bc"],
+          "formula" => "pde_weight * num_supervised * pde + supervised_weight * supervised"
         ),
         "ode_matrix" => ode_matrix,
         "benchmark_coefficients" => benchmark_coefficients
@@ -176,7 +193,7 @@ function scaling_lbfgs(settings::TrainingSchemesSettings, iteration_counts::Dict
     for (run_idx, inner_dict) in settings.training_dataset
       converted_dict = convert_plugboard_keys(inner_dict)
 
-      pinn_settings = PINNSettings(100, 1234, converted_dict, iteration_count, settings.num_supervised, settings.N, settings.num_points, settings.x_left, settings.x_right, settings.supervised_weight, settings.bc_weight, settings.pde_weight, settings.xs, "lbfgs")
+      pinn_settings = PINNSettings(100, 1234, converted_dict, iteration_count, settings.N, settings.num_supervised, settings.num_points, settings.x_left, settings.x_right, settings.supervised_weight, settings.pde_weight, settings.xs, "lbfgs")
 
       run_id = generate_run_id(pinn_settings.optimizer)
       output_dir = joinpath("results", "run-$run_id")

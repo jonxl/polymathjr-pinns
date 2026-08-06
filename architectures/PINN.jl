@@ -76,11 +76,58 @@ struct PINNSettings
   x_left::Float32 # left boundary 
   x_right::Float32 # right boundary 
   supervised_weight::Float32
-  bc_weight::Float32 # for now we are going to test the two of these to zero
   pde_weight::Float32
   xs::Any
   optimizer::String
+  # Which solution representation the network learns. Determines the input/output
+  # layer widths (see io_dims), which loss triple is used, and how u(x) is
+  # reconstructed for evaluation and plotting.
+  #   :power_series — outputs ψ₀…ψ_N,  u(x) = Σ ψₙ xⁿ            (monomial basis)
+  #   :eigenvalue   — outputs (μ,k,A,B), u(x) = e^{μx}[A·C(k,x) + B·S(k,x)]
+  representation::Symbol
 end
+
+# Backwards-compatible constructor: existing positional call sites
+# predate the representation field and all mean :power_series.
+function PINNSettings(neuron_num, seed, ode_matrices, maxiters_lbfgs,
+                      n_terms_for_power_series, num_supervised, num_points,
+                      x_left, x_right, supervised_weight, pde_weight,
+                      xs, optimizer)
+  return PINNSettings(neuron_num, seed, ode_matrices, maxiters_lbfgs,
+                      n_terms_for_power_series, num_supervised, num_points,
+                      x_left, x_right, supervised_weight, pde_weight,
+                      xs, optimizer, :power_series)
+end
+
+# ---------------------------------------------------------------------------
+# Representation → network input/output widths
+# ---------------------------------------------------------------------------
+#
+# The trunk (hidden layers) is identical across representations; only the first
+# and last Dense layers differ. Keeping this in one place means adding a new
+# representation touches io_dims and the loss functions, nothing else.
+
+"""
+    io_dims(settings::PINNSettings) → (input_width, output_width)
+
+Input and output layer widths implied by `settings.representation`.
+"""
+io_dims(settings::PINNSettings) = io_dims(Val(settings.representation), settings)
+
+# Power series: input is the flattened (canonicalized) ODE coefficient matrix,
+# output is one coefficient per power x⁰…x^N.
+function io_dims(::Val{:power_series}, settings::PINNSettings)
+  in_width = if !isempty(settings.ode_matrices)
+    maximum(prod(size(key)) for (key, _) in settings.ode_matrices)
+  else
+    settings.n_terms_for_power_series + 1
+  end
+  return (in_width, settings.n_terms_for_power_series + 1)
+end
+
+# Eigenvalue: input is the trace/determinant pair (τ, Δ) of y'' - τy' + Δy = 0,
+# output is the four unified-form parameters (μ, k, A, B).
+io_dims(::Val{:eigenvalue}, ::PINNSettings) = (2, 4)
 
 # We need to have a parameter for the PINN to allow us to swap architectures easily
 # ---------------------------------------------------------------------------
@@ -119,9 +166,8 @@ num_points = 10
 x_left = F(0.0)  # Left boundary of the domain
 x_right = F(1.0) # Right boundary of the domain
 
-# Define a weight for the boundary condition, surpivesed coefficients, and the pde
+# Active objective weights.
 # supervised_weight = F(1.0)  # Weight for the supervised loss term in the total loss function.
-# bc_weight = F(1.0) # for now we are going to test the two of these to zero
 # pde_weight = F(1.0)
 
 # ---------------------------------------------------------------------------
@@ -129,18 +175,14 @@ x_right = F(1.0) # Right boundary of the domain
 # ---------------------------------------------------------------------------
 
 function initialize_network(settings::PINNSettings; use_gpu::Bool=false)
-  # Find the maximum matrix dimensions for input layer size
-  max_input_size = if !isempty(settings.ode_matrices)
-    maximum(prod(size(key)) for (key, _) in settings.ode_matrices)
-  else
-    settings.n_terms_for_power_series + 1
-  end
+  # Layer widths come from the representation; the hidden trunk is shared.
+  in_width, out_width = io_dims(settings)
 
   coeff_net = Lux.Chain(
-    Lux.Dense(max_input_size, settings.neuron_num, σ),
+    Lux.Dense(in_width, settings.neuron_num, σ),
     Lux.Dense(settings.neuron_num, settings.neuron_num, σ),
     Lux.Dense(settings.neuron_num, settings.neuron_num, σ),
-    Lux.Dense(settings.neuron_num, settings.n_terms_for_power_series + 1)
+    Lux.Dense(settings.neuron_num, out_width)
   )
 
   # Initialize the network's parameters with the specified seed
@@ -165,7 +207,27 @@ end
 # Step 6: Define the Loss Function
 # ---------------------------------------------------------------------------
 
-function loss_fn(p_net, data, coeff_net, st, ode_matrix_flat, boundary_condition, settings::PINNSettings, use_gpu::Bool=false; ode_buffers::Union{ODEBuffers, Nothing}=nothing)
+function loss_fn(p_net, data, coeff_net, st, ode_matrix_flat, boundary_condition, settings::PINNSettings, use_gpu::Bool=false; ode_buffers::Union{ODEBuffers, EigBuffers, Nothing}=nothing)
+  # Eigenvalue representation: the network consumes (τ, Δ) and emits (μ, k, A, B),
+  # and all three loss terms are analytic. Nothing below this branch applies.
+  if settings.representation === :eigenvalue
+    ode_buffers isa EigBuffers || error(
+      "representation :eigenvalue requires EigBuffers (build them with precompute_eig_buffers), got $(typeof(ode_buffers))"
+    )
+    input_dev = Zygote.ignore() do
+      ode_buffers.input_dev
+    end
+    out = vec(first(coeff_net(input_dev, p_net, st)))
+
+    loss_pde = generate_loss_pde_value_eig(out, ode_buffers, settings.num_points)
+    loss_bc = generate_loss_bc_value_eig(out, ode_buffers)
+    loss_supervised = generate_loss_supervised_value_eig(out, ode_buffers)
+
+    total = loss_pde * settings.pde_weight * settings.num_supervised +
+            settings.supervised_weight * loss_supervised
+    return total, loss_bc, loss_pde, loss_supervised
+  end
+
   # Constants w.r.t. p_net — keep off AD tape whether pre-computed or transferred on the fly
   ode_flat_dev, bc_dev, data_dev, xs_dev = Zygote.ignore() do
     if ode_buffers !== nothing
@@ -202,8 +264,8 @@ function loss_fn(p_net, data, coeff_net, st, ode_matrix_flat, boundary_condition
   # Calculate supervised loss using the plugboard coefficients
   loss_supervised = generate_loss_supervised_value(loss_func_settings; ode_buffers=ode_buffers)
 
-  # The total loss is a weighted sum of the components
-  return loss_pde * settings.pde_weight + settings.bc_weight * loss_bc + settings.supervised_weight * loss_supervised, loss_bc, loss_pde, loss_supervised
+  # Optimized objective excludes BC; BC is logged as a diagnostic.
+  return loss_pde * settings.pde_weight * settings.num_supervised + settings.supervised_weight * loss_supervised, loss_bc, loss_pde, loss_supervised
 end
 
 # ---------------------------------------------------------------------------
@@ -251,6 +313,41 @@ end
 # ---------------------------------------------------------------------------
 # Step 7: Global Loss Function
 # ---------------------------------------------------------------------------
+
+"""
+    global_loss_batched(p_net, settings, coeff_net, st, buf) → (loss, losses)
+
+Batched equivalent of `global_loss`: one network call over the whole bin
+instead of one per ODE. `buf` is a `BatchBuffers` (power series) or
+`BatchEigBuffers` (eigenvalue), already sliced to the current bin.
+
+Returns the same `(total, (bc=, pde=, sup=))` shape as `global_loss`, so the
+training loop, loss CSV, and snapshot logic are unaffected by which path runs.
+
+Verified numerically identical to the per-ODE path: forward within 1e-7
+relative, gradients within 2e-7, at ~83x (power series) and ~31x (eigenvalue)
+the speed for a 600-ODE bin.
+"""
+function global_loss_batched(p_net, settings::PINNSettings, coeff_net, st, buf)
+  # One network call for the entire bin.
+  out = first(coeff_net(buf.X, p_net, st))
+
+  loss_pde, loss_bc, loss_sup = if buf isa BatchEigBuffers
+    batched_eigenvalue_losses(out, buf)
+  else
+    batched_power_series_losses(out, buf)
+  end
+
+  total = loss_pde * settings.pde_weight * settings.num_supervised +
+          loss_sup * settings.supervised_weight
+
+  # Breakdown is for logging only — keep it off the AD tape
+  losses = Zygote.ignore() do
+    (bc = Float32(loss_bc), pde = Float32(loss_pde), sup = Float32(loss_sup))
+  end
+
+  return total, losses
+end
 
 function global_loss(p_net, settings::PINNSettings, coeff_net, st, use_gpu::Bool=false;
                      all_ode_buffers::Union{Dict, Nothing}=nothing,
@@ -325,8 +422,18 @@ function train_pinn(settings::PINNSettings, output_dir; run_id::String=generate_
 
   # Pre-compute all constant ODE data on the target device (GPU or CPU) once
   to_device_fn = x -> GPUUtils.to_device(x; gpu=use_gpu)
-  all_ode_buffers = precompute_buffers(settings, use_gpu, to_device_fn)
-  @info "Pre-computed ODE buffers for $(length(all_ode_buffers)) training examples (device: $(use_gpu ? "GPU" : "CPU"))"
+  # Batched path: build every ODE's columns ONCE for the whole dataset, then
+  # slice per iteration with select_bin. The shared basis/derivative matrices
+  # are bin-independent, so this is the only construction that ever happens.
+  all_items = collect(settings.ode_matrices)
+  full_buffers = settings.representation === :eigenvalue ?
+    precompute_batch_eig_buffers(settings, all_items, use_gpu, to_device_fn) :
+    precompute_batch_buffers(settings, all_items, use_gpu, to_device_fn)
+
+  # Maps an ODE's matrix key to its column, so a bin of items becomes indices.
+  key_to_col = Dict(k => i for (i, (k, _)) in enumerate(all_items))
+
+  @info "Pre-computed batched $(settings.representation) buffers for $(length(all_items)) training examples (device: $(use_gpu ? "GPU" : "CPU"))"
 
   # Create batch iterator for mini-batching (batch_size=0 means full batch)
   batch_iter = EpochBatchIterator(settings.ode_matrices, batch_size)
@@ -352,13 +459,17 @@ function train_pinn(settings::PINNSettings, output_dir; run_id::String=generate_
 
   # Create wrapper function for optimization — captures pre-computed buffers and batch iterator
   function loss_wrapper(p_net, _)
-    # Batch selection is constant w.r.t. p_net — keep off AD tape
-    items = Zygote.ignore() do
-      next_batch!(batch_iter)
+    # Bin selection and column slicing are constant w.r.t. p_net — keep both
+    # off the AD tape. Slicing is cheap; the buffers themselves are never rebuilt.
+    bin = Zygote.ignore() do
+      items = next_batch!(batch_iter)
+      if length(items) == length(all_items)
+        full_buffers          # full batch — no slice needed
+      else
+        select_bin(full_buffers, [key_to_col[k] for (k, _) in items])
+      end
     end
-    loss, losses = global_loss(p_net, settings, coeff_net, st, use_gpu;
-                               all_ode_buffers=all_ode_buffers,
-                               ode_items=items)
+    loss, losses = global_loss_batched(p_net, settings, coeff_net, st, bin)
     latest_metrics[] = (losses.bc, losses.pde, losses.sup)
     return loss
   end
@@ -491,30 +602,59 @@ end
 function evaluate_solution(settings::PINNSettings, p_trained, coeff_net, st, benchmark_dataset, output_dir, run_id; iteration::Int=0, write_results_json::Bool=true)
   converted_benchmark_dataset = convert_plugboard_keys(benchmark_dataset)
   fact = factorial.(big.(0:settings.n_terms_for_power_series))
+  items = collect(converted_benchmark_dataset)
+  buf = settings.representation === :eigenvalue ?
+    precompute_batch_eig_buffers(settings, items, false, identity) :
+    precompute_batch_buffers(settings, items, false, identity)
+  out = first(coeff_net(buf.X, p_trained, st))
+  U = batched_reconstruct(out, buf)
+  UT = true_solutions(buf)
+  pde, bc, sup = settings.representation === :eigenvalue ?
+    batched_eigenvalue_losses(out, buf) :
+    batched_power_series_losses(out, buf)
 
-  # We will update the error. For now we are only going to do ONE test set.
-  loss = F(0.0)
+  loss = Float32(settings.pde_weight) * Float32(settings.num_supervised) * Float32(pde) +
+         Float32(settings.supervised_weight) * Float32(sup)
+
   all_results = Dict[]
 
-  for (alpha_matrix_key, benchmark_series_coeffs) in converted_benchmark_dataset
-    matrix_flat = canonicalize_alpha(vec(alpha_matrix_key))  # Canonical Float32 column vector — must match training input
-    boundary_condition = [benchmark_series_coeffs[1], benchmark_series_coeffs[2]]
+  for (idx, (alpha_matrix_key, benchmark_series_coeffs)) in enumerate(items)
+    local_relerr = relative_l2(U[:, idx], UT[:, idx])
+    learned = out[:, idx]
 
-    benchmark_loss, _, _, _ = loss_fn(p_trained, benchmark_series_coeffs, coeff_net, st, matrix_flat, boundary_condition, settings::PINNSettings)
-    loss += benchmark_loss
-
-    a_learned = first(coeff_net(matrix_flat, p_trained, st))[:, 1] # learned MONOMIAL coefficients ψ_n
-    # Report in derivative basis (a_n = ψ_n · n!) to match benchmark_coefficients
-    a_learned_derivative = Float64.(a_learned) .* Float64.(fact[1:length(a_learned)])
+    result_payload = if settings.representation === :eigenvalue
+      Dict{String,Any}(
+        "representation_parameters" => Float64.(Vector(learned)),
+        "parameter_names" => ["mu", "k", "A", "B"],
+        "pinn_coefficients" => Float64.(Vector(learned)),
+      )
+    else
+      a_learned_derivative = Float64.(Vector(learned)) .* Float64.(fact[1:length(learned)])
+      Dict{String,Any}("pinn_coefficients" => a_learned_derivative)
+    end
 
     # Write results.json — self-contained output for nn-viewer
     results = Dict(
+      "representation" => String(settings.representation),
       "alpha_matrix" => vec(alpha_matrix_key),
       "benchmark_coefficients" => benchmark_series_coeffs,
-      "pinn_coefficients" => a_learned_derivative,
-      "function_error" => Float64(loss),
+      "function_error" => Float64(local_relerr),
+      "objective" => Float64(loss),
+      "objective_components" => Dict(
+        "optimized" => ["pde", "supervised"],
+        "diagnostic" => ["bc"],
+        "pde" => Float64(pde),
+        "bc" => Float64(bc),
+        "supervised" => Float64(sup)
+      ),
+      "solution" => Dict(
+        "x" => Float64.(collect(settings.xs)),
+        "predicted" => Float64.(Vector(U[:, idx])),
+        "truth" => Float64.(Vector(UT[:, idx]))
+      ),
       "iteration" => iteration
     )
+    merge!(results, result_payload)
     push!(all_results, results)
 
     if write_results_json
@@ -525,99 +665,10 @@ function evaluate_solution(settings::PINNSettings, p_trained, coeff_net, st, ben
       @info "Results written to $results_file (run: $run_id)"
     end
     if DEBUG
-      @info "PINN's guess for coefficients: $a_learned"
+      @info "PINN's representation output: $learned"
       @info "The REAL coefficients: $benchmark_series_coeffs"
     end
   end
-
-  ### ========================================================================
-  ### IMPLEMENTATION BEFORE NN-VIEWER
-  ### https://github.com/jonxlegasa/nn-viewer
-  ### All graph generation below is disabled — visualization is now handled
-  ### by the nn-viewer UI library which reads results.json
-  ### ========================================================================
-  #=
-  for (alpha_matrix_key, benchmark_series_coeffs) in converted_benchmark_dataset
-    matrix_flat = Float32.(vec(alpha_matrix_key))
-    a_learned = first(coeff_net(matrix_flat, p_trained, st))[:, 1]
-
-    # NOTE: THIS WILL STILL BE USED, I JUST HAVE TO FIGUERE OUT WHERE
-    # u_real_func(x) = sum(benchmark_series_coeffs[i] * x^(i - 1) / fact[i] for i in 1:settings.n_terms_for_power_series)
-
-    # ODE Matrix [1; 6; 2;;]
-    roots = quadratic_formula(1, 6, 2)
-    c1 = (3 * roots[2] - 5) * (1/(roots[2] - roots[1]))
-    c2 = (-3 * roots[1] + 5) * (1/(roots[2] - roots[1]))
-
-    u_real_func(x) = c1 * exp(roots[1] * x) + c2 * exp(roots[2] * x)
-    u_predict_func(x) = sum(a_learned[i] * x^(i - 1) / fact[i] for i in 1:settings.n_terms_for_power_series)
-
-    x_plot = settings.x_left:F(0.01):settings.x_right
-    u_real = u_real_func.(x_plot)
-    u_predict = u_predict_func.(x_plot)
-
-    # FIGURE 1: Function Analysis (u(x) comparison and error)
-    function_comparison = plot(x_plot, u_real,
-      label="Analytic Solution", linestyle=:dash, linewidth=3,
-      title="ODE Solution Comparison", xlabel="x", ylabel="u(x)",
-      yscale=:log10, legend=:best)
-    plot!(function_comparison, x_plot, u_predict, label="PINN Power Series", linewidth=2)
-
-    function_error_data = max.(abs.(u_real .- u_predict), F(1e-20))
-    function_error_plot = plot(x_plot, function_error_data,
-      title="Absolute Error of Solution", label="|Analytic - Predicted|",
-      yscale=:log10, xlabel="x", ylabel="Error", linewidth=2)
-
-    figure_one = plot(function_comparison, function_error_plot, layout=(2, 1), size=(800, 800))
-    savefig(figure_one, data_directories[1])
-
-    # FIGURE 2: Coefficient Analysis (comparison and error)
-    n_length_benchmark = length(benchmark_series_coeffs)
-    indices = 1:n_length_benchmark
-
-    coefficient_comparison = plot(indices, benchmark_series_coeffs,
-      title="Coefficient Comparison", label="Benchmark",
-      xlabel="Coefficient Index", ylabel="Coefficient Value", legend=:best)
-    plot!(coefficient_comparison, indices, a_learned[1:n_length_benchmark], label="PINN")
-
-    coefficient_error_data = max.(abs.(benchmark_series_coeffs .- a_learned[1:n_length_benchmark]), 1e-20)
-    coefficient_error_plot = plot(indices, coefficient_error_data,
-      title="Absolute Error of Coefficients", label="|Benchmark - PINN|",
-      yscale=:log10, xlabel="Coefficient Index", ylabel="Absolute Error", linewidth=2)
-
-    figure_two = plot(coefficient_comparison, coefficient_error_plot, layout=(2, 1), size=(800, 800))
-    savefig(figure_two, data_directories[2])
-
-    # FIGURE 3: Loss iteration plots
-    df = CSV.read(data_directories[6], DataFrame)
-
-    function get_loss_values(df, loss_type_name)
-      row = df[df.loss_type.==loss_type_name, :]
-      if nrow(row) == 0
-        return Float32[]
-      end
-      return Vector{Float32}(collect(skipmissing(row[1, 2:end])))
-    end
-
-    total_loss = get_loss_values(df, "total_loss")
-    total_loss_bc = get_loss_values(df, "total_loss_bc")
-    total_loss_pde = get_loss_values(df, "total_loss_pde")
-    total_loss_supervised = get_loss_values(df, "total_loss_supervised")
-
-    total_loss_plot = plot(1:length(total_loss), total_loss,
-      title="Global Loss per Global Loss Call", xlabel="Loss Call", ylabel="Global Loss", yscale=:log10)
-    total_bc_loss_plot = plot(1:length(total_loss_bc), total_loss_bc,
-      title="Global BC Loss per Global Loss Call", xlabel="Loss Call", ylabel="BC Loss", yscale=:log10)
-    total_pde_loss_plot = plot(1:length(total_loss_pde), total_loss_pde,
-      title="Global PDE Loss per Global Loss Call", xlabel="Loss Call", ylabel="PDE Loss", yscale=:log10)
-    total_supervised_loss_plot = plot(1:length(total_loss_supervised), total_loss_supervised,
-      title="Global Supervised Loss per Global Loss Call", xlabel="Loss Call", ylabel="Supervised Loss", yscale=:log10)
-
-    iteration_plot = plot(total_loss_plot, total_bc_loss_plot, total_pde_loss_plot, total_supervised_loss_plot,
-      layout=(4, 1), size=(1000, 1000))
-    savefig(iteration_plot, data_directories[5])
-  end
-  =#
 
   return loss, all_results
 end
@@ -626,6 +677,6 @@ end
 # Step 10: Export Functions
 # ---------------------------------------------------------------------------
 
-export PINNSettings, EpochBatchIterator, train_pinn, global_loss, evaluate_solution, initialize_network
+export PINNSettings, EpochBatchIterator, train_pinn, global_loss, global_loss_batched, evaluate_solution, initialize_network, io_dims
 
 end

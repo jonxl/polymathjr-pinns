@@ -23,6 +23,12 @@ using .Theme
 include("NNViewer.jl")
 using .NNViewer
 
+include("PanelViewer.jl")
+using .PanelViewer
+using .PanelViewer.Panels.PanelSpec
+
+export explore, explore_panels, view_panels, load_panels, get_theme
+
 """
     explore(results_json::String, loss_csv::String;
             theme::Theme.Theme = Theme.DARK_THEME, kwargs...)
@@ -45,5 +51,21 @@ function explore(results_json::String, loss_csv::String;
                  theme::Theme.Theme = Theme.DARK_THEME, kwargs...)
     NNViewer.view(results_json, loss_csv; theme = theme, kwargs...)
 end
+
+"""
+    explore_panels(paths; theme = Theme.DARK_THEME, kwargs...)
+
+Launch the generic experiment-panel viewer for JSON files emitted by
+`utils/experiments.jl` and `scripts/shared/*.jl`.
+"""
+function explore_panels(paths::Vector{String};
+                        theme::Theme.Theme = Theme.DARK_THEME, kwargs...)
+    PanelViewer.view_panels(paths; theme = theme, kwargs...)
+end
+
+explore_panels(path::String; kwargs...) = explore_panels([path]; kwargs...)
+
+view_panels(args...; kwargs...) = PanelViewer.view_panels(args...; kwargs...)
+load_panels(path::String) = PanelSpec.load_panels(path)
 
 end # module Viz

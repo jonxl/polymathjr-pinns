@@ -23,11 +23,12 @@ julia --project src/main.jl --help
 | Flag | Type | Default | Description |
 |------|------|---------|-------------|
 | `--mode` | String | `"TRAIN"` | Training mode: `TRAIN` or `GRID_SEARCH` |
+| `--representation` | String | `"power_series"` | Solution representation: `power_series` or `eigenvalue` |
 | `--gen-data` | Flag | `false` | Regenerate datasets via plugboard before training |
 | `--data` | String | `"RANDOM"` | Dataset generation mode: `RANDOM` or `SPECIFIC` |
 | `--no-snap` | Flag | snapshots ON | Disable saving weight snapshots during training |
 | `--snap-every` | Int | `100` | Legacy iteration snapshot interval; epoch snapshots are controlled by `--epochs` in mini-batch mode |
-| `--resume` | String | `nothing` | Path to `.safetensors` snapshot file for warm-start; legacy `.bin` files are still readable |
+| `--resume` | String | `nothing` | Path to `.safetensors` model/checkpoint file for warm-start |
 | `--bins` | Int | `32` | ODEs per bin. `0` = full batch (all ODEs per iteration) |
 | `--epochs` | Int | `10` | Save an intermediate checkpoint after every N complete epochs (mini-batch mode) |
 | `--maxiters` | Int | `10000` | Maximum number of training iterations (gradient updates) |
@@ -54,6 +55,9 @@ julia --project src/main.jl --gen-data --data RANDOM
 
 # Threaded grid search
 julia --project -t auto src/main.jl --mode GRID_SEARCH
+
+# Train the unified eigenvalue representation
+julia --project src/main.jl --representation eigenvalue
 ```
 
 ---
@@ -64,6 +68,7 @@ julia --project -t auto src/main.jl --mode GRID_SEARCH
 
 ```bash
 julia --project src/explore.jl [RESULTS_JSON] [LOSS_CSV] [--theme THEME]
+julia --project src/explore.jl data/shared_transfer_power_series.json data/shared_transfer_eigenvalue.json
 ```
 
 ### Arguments
@@ -72,6 +77,7 @@ julia --project src/explore.jl [RESULTS_JSON] [LOSS_CSV] [--theme THEME]
 |----------|----------|-------------|
 | `RESULTS_JSON` | No | Path to `training_results.json`. Auto-detected from `results/` if omitted. |
 | `LOSS_CSV` | No | Path to `loss.csv`. Auto-detected from same run as JSON if omitted. |
+| `PANEL_JSON` | No | One or more PanelSet JSON files emitted by `scripts/shared/` |
 | `--theme NAME` | No | Colour theme: `dark` (default), `light`, `high_contrast` |
 | `--help` / `-h` | No | Show help text |
 
@@ -86,6 +92,9 @@ julia --project src/explore.jl results/run-adam-07-23-26/training_results.json r
 
 # Light theme
 julia --project src/explore.jl --theme light
+
+# Compare shared experiment renderings
+julia --project src/explore.jl data/shared_genradius_family_power_series.json data/shared_genradius_family_eigenvalue.json
 ```
 
 ---
@@ -103,7 +112,6 @@ PINN hyperparameters are stable architectural choices and remain as constants in
 | `NUM_POINTS` | `10` | Collocation points |
 | `X_LEFT` / `X_RIGHT` | `0.0` / `1.0` | Domain bounds |
 | `SUPERVISED_WEIGHT` | `1.0` | Supervised loss weight |
-| `BC_WEIGHT` | `1.0` | Boundary condition loss weight |
 | `PDE_WEIGHT` | `1.0` | PDE residual loss weight |
 
 To change these, edit `src/main.jl` directly.

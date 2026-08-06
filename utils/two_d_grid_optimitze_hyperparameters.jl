@@ -27,14 +27,12 @@ function evaluate_weight_configuration(training_dataset, weights::NamedTuple,
 
   # Extract weights
   supervised_weight = weights.supervised
-  bc_weight = weights.bc
   pde_weight = weights.pde
 
   # Create directory for this configuration
   config_dir = joinpath(base_data_dir, 
                        "s$(round(supervised_weight, digits=2))-" *
-                       "b$(round(bc_weight, digits=2))-" *
-                       "p$(round(pde_weight, digits=2))")
+                        "p$(round(pde_weight, digits=2))")
   mkpath(config_dir)
 
   # Initialize objective value accumulator
@@ -47,10 +45,10 @@ function evaluate_weight_configuration(training_dataset, weights::NamedTuple,
     converted_dict = ConvertStringToMatrix.convert(ConvertSettings)
     settings = PINNSettings(5, 1234, converted_dict, 500, 500,
                            num_supervised, N, 10, x_left, x_right,
-                           supervised_weight, bc_weight, pde_weight, xs)
+                           supervised_weight, pde_weight, xs)
     
     # Train the network
-    println("  Training with weights: supervised=$(supervised_weight), bc=$(bc_weight), pde=$(pde_weight)")
+    println("  Training with weights: supervised=$(supervised_weight), pde=$(pde_weight)")
     p_trained, coeff_net, st = train_pinn(settings)
     
     # Evaluate and compute error metric

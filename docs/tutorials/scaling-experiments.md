@@ -34,7 +34,6 @@ settings = TrainingSchemesSettings(
     x_left = 0.0f0,
     x_right = 1.0f0,
     supervised_weight = 0.1f0,
-    bc_weight = 1.0f0,
     pde_weight = 1.0f0,
     xs = collect(range(0, 1, 20))
 )

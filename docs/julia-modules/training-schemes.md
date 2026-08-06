@@ -18,7 +18,6 @@ struct TrainingSchemesSettings
     x_left::Float32
     x_right::Float32
     supervised_weight::Float32
-    bc_weight::Float32
     pde_weight::Float32
     xs::Vector{Float32}
 end
@@ -53,7 +52,7 @@ Unified training path — trains a PINN once, evaluates at milestones.
 ```julia
 run_training(settings::TrainingSchemesSettings, maxiters::Int, milestone_interval::Int;
              snapshot_path=nothing, batch_size=0, snapshot_epoch_interval=10,
-             neuron_count=100, seed=1234)
+             neuron_count=100, seed=1234, representation=:power_series)
 ```
 
 **Example:**
@@ -68,7 +67,7 @@ Writes `model.safetensors` for the final trained MLP, plus `training_results.jso
 
 ### `grid_search_at_scale(settings, neurons_counts)`
 
-2D grid search over loss weights at different network scales.
+2D grid search over the optimized loss weights at different network scales.
 
 ```julia
 grid_search_at_scale(settings, neurons_counts::Dict)

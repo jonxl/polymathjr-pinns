@@ -10,6 +10,9 @@ using .SafeTensorSnapshots
 include("../utils/helper_funcs.jl")
 using .helper_funcs
 
+include("../utils/loss_functions.jl")
+using .loss_functions
+
 """
     load_and_infer(snapshot_path::String, ode_matrix::Matrix)
 
@@ -19,20 +22,32 @@ The file is fully self-contained — no external PINNSettings needed.
 Returns a vector of predicted coefficients.
 """
 function load_and_infer(snapshot_path::String, ode_matrix::Matrix)
-  coeff_net, p, st, _ = SafeTensorSnapshots.load_model(snapshot_path)
-  matrix_flat = canonicalize_alpha(vec(ode_matrix))  # must match training input convention
-  coefficients = first(coeff_net(matrix_flat, p, st))[:, 1]
-  return coefficients
+  coeff_net, p, st, metadata = SafeTensorSnapshots.load_model(snapshot_path)
+  representation = Symbol(get(metadata, "representation", "power_series"))
+  input = if representation === :eigenvalue
+    tau, delta = tau_delta_from_alpha(vec(ode_matrix))
+    Float32[tau, delta]
+  else
+    canonicalize_alpha(vec(ode_matrix))
+  end
+  return first(coeff_net(input, p, st))[:, 1]
 end
 
 """
-    construct_solution(ψ::AbstractVector) → f_Ω
+    construct_solution(output::AbstractVector; representation=:power_series) → f_Ω
 
-Turn the model's output — the monomial coefficient vector ψ — into the callable
-constructed function f_Ω(x) = Σ ψ_n xⁿ (evaluated via Horner's method).
+Turn a model output into the callable constructed function.
 """
-function construct_solution(ψ::AbstractVector)
-  coeffs = Tuple(Float64.(ψ))   # evalpoly expects ascending-order coefficients
+function construct_solution(output::AbstractVector; representation::Symbol=:power_series)
+  vals = Float64.(output)
+  if representation === :eigenvalue
+    mu, k, A, B = vals
+    C(x) = k >= 0 ? cosh(sqrt(k) * x) : cos(sqrt(-k) * x)
+    S(x) = abs(k) < 1e-12 ? x :
+           (k > 0 ? sinh(sqrt(k) * x) / sqrt(k) : sin(sqrt(-k) * x) / sqrt(-k))
+    return x -> exp(mu * Float64(x)) * (A * C(Float64(x)) + B * S(Float64(x)))
+  end
+  coeffs = Tuple(vals)
   return x -> evalpoly(Float64(x), coeffs)
 end
 
@@ -42,8 +57,12 @@ end
 One step from a saved model + ODE matrix to the callable solution:
 inference (`load_and_infer`) composed with `construct_solution`.
 """
-load_solution(snapshot_path::String, ode_matrix::Matrix) =
-  construct_solution(load_and_infer(snapshot_path, ode_matrix))
+function load_solution(snapshot_path::String, ode_matrix::Matrix)
+  _, _, _, metadata = SafeTensorSnapshots.load_model(snapshot_path)
+  representation = Symbol(get(metadata, "representation", "power_series"))
+  return construct_solution(load_and_infer(snapshot_path, ode_matrix);
+                            representation=representation)
+end
 
 """
     replay_snapshots(run_dir::String, ode_matrix::Matrix)

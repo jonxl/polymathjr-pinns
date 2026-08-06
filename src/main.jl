@@ -38,6 +38,10 @@ function parse_commandline()
       help = "Training mode: TRAIN or GRID_SEARCH"
       arg_type = String
       default = "TRAIN"
+    "--representation"
+      help = "Solution representation: power_series (u = Σ ψₙxⁿ) or eigenvalue (u = e^{μx}[A·C(k,x)+B·S(k,x)]). eigenvalue requires 2nd-order ODEs."
+      arg_type = String
+      default = "power_series"
     "--gen-data"
       help = "Regenerate datasets via plugboard before training"
       action = :store_true
@@ -86,6 +90,13 @@ GENERATE_DATASET = parsed_args["gen-data"]
 MODE = parsed_args["data"]
 TRAINING_MODE = parsed_args["mode"]
 
+# Which solution representation to train. Determines the network's input/output
+# widths (via io_dims), which loss triple runs, and which buffers are built.
+REPRESENTATION = Symbol(parsed_args["representation"])
+if !(REPRESENTATION in (:power_series, :eigenvalue))
+  error("--representation must be power_series or eigenvalue, got \"$(parsed_args["representation"])\"")
+end
+
 SAVE_SNAPSHOTS = !parsed_args["no-snap"]
 SNAPSHOT_INTERVAL = parsed_args["snap-every"]
 
@@ -107,7 +118,6 @@ NUM_POINTS = 22               # Collocation points — ≥ N+1 so zero PDE loss 
 X_LEFT = Float32(0.0)
 X_RIGHT = Float32(1.0)
 SUPERVISED_WEIGHT = Float32(1.0)
-BC_WEIGHT = Float32(1.0)
 PDE_WEIGHT = Float32(1.0)
 
 #=
@@ -246,7 +256,7 @@ function run_training_sequence(batch_sizes::Array{Int})
       training_dataset, benchmark_dataset,
       N, NUM_SUPERVISED, NUM_POINTS,
       X_LEFT, X_RIGHT,
-      SUPERVISED_WEIGHT, BC_WEIGHT, PDE_WEIGHT, xs)
+      SUPERVISED_WEIGHT, PDE_WEIGHT, xs)
 
     snap = LOAD_SNAPSHOT ? SNAPSHOT_PATH : nothing
     run_training(train_settings, MAXITERS, milestone_interval;
@@ -254,7 +264,8 @@ function run_training_sequence(batch_sizes::Array{Int})
                  batch_size=BIN_SIZE,
                  snapshot_epoch_interval=SAVE_SNAPSHOTS ? SNAPSHOT_EVERY_N_EPOCHS : 0,
                  neuron_count=NEURON_COUNT,
-                 seed=SEED)
+                 seed=SEED,
+                 representation=REPRESENTATION)
 
   elseif TRAINING_MODE == "GRID_SEARCH"
     # Threaded 2D grid search over pde_weight x supervised_weight

@@ -43,7 +43,6 @@ function evaluate_weight_configuration(neuron_count, training_dataset, benchmark
 num_supervised, N, x_left, x_right, xs, base_data_dir; progress_callback::Union{Function,Nothing}=nothing, milestone_interval::Int=1000)
   # Extract weights
   supervised_weight = weights.supervised
-  bc_weight = weights.bc
   pde_weight = weights.pde
 
   # Initialize objective value accumulator
@@ -61,7 +60,7 @@ num_supervised, N, x_left, x_right, xs, base_data_dir; progress_callback::Union{
       float_converted_dict[Float32.(mat)] = series
     end
 
-    settings = PINNSettings(neuron_count, 1234, Dict{Any,Any}(float_converted_dict), 10000, N, num_supervised, 1000, x_left, x_right, Float32(supervised_weight), Float32(bc_weight), Float32(pde_weight), xs, "adam")
+    settings = PINNSettings(neuron_count, 1234, Dict{Any,Any}(float_converted_dict), 10000, N, num_supervised, 1000, x_left, x_right, Float32(supervised_weight), Float32(pde_weight), xs, "adam")
 
     # Milestone callback: evaluate at intermediate checkpoints
     milestones = NamedTuple[]

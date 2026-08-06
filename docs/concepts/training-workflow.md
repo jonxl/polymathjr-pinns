@@ -136,10 +136,10 @@ Each iteration logs to `loss.csv` with the following columns:
 | Column | Description |
 |--------|-------------|
 | `iteration` | Training iteration number |
-| `total` | Weighted sum of all losses |
+| `total` | Optimized objective |
 | `pde` | ODE residual loss |
-| `bc` | Boundary condition loss |
-| `supervised` | Coefficient MSE |
+| `bc` | Boundary/initial-condition diagnostic loss |
+| `supervised` | Supervised loss |
 
 ---
 
@@ -159,7 +159,7 @@ Snapshot behavior is controlled via CLI flags:
 | `--no-snap` | Disable snapshot saving entirely |
 | `--snap-every N` | Legacy iteration interval; mini-batch snapshots use `--epochs` |
 | `--epochs N` | Save after every N epochs in mini-batch mode (default: 10) |
-| `--resume <path>` | Warm-start from a `.safetensors` snapshot file; legacy `.bin` files are still readable |
+| `--resume <path>` | Warm-start from a `.safetensors` model/checkpoint file |
 
 `--no-snap` disables intermediate checkpoints only. The final `model.safetensors` is still written.
 

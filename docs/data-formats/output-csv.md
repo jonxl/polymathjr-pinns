@@ -24,10 +24,10 @@ iteration,total,bc,pde,supervised
 | Column | Description |
 |--------|-------------|
 | `iteration` | Training iteration number (1-based) |
-| `total` | Weighted sum of all losses |
-| `bc` | Boundary condition loss |
+| `total` | Optimized objective |
+| `bc` | Boundary/initial-condition diagnostic loss |
 | `pde` | ODE residual loss |
-| `supervised` | Supervised coefficient MSE |
+| `supervised` | Supervised loss |
 
 ---
 
@@ -77,7 +77,7 @@ Look for:
 - **Monotonic decrease:** Healthy training
 - **Plateaus:** May need more iterations or learning rate adjustment
 - **Oscillations:** Learning rate too high
-- **Component balance:** No single loss dominating
+- **Diagnostic balance:** compare optimized losses with the BC/IC diagnostic
 
 ---
 

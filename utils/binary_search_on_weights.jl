@@ -44,15 +44,9 @@ function search(training_dataset, weight_name::Symbol, weight_range::Tuple{Int,I
     # Set weights based on which one we are searching
     if weight_name == :supervised
       supervised_weight = mid
-      bc_weight = fixed_weights.bc
-      pde_weight = fixed_weights.pde
-    elseif weight_name == :bc
-      supervised_weight = fixed_weights.supervised
-      bc_weight = mid
       pde_weight = fixed_weights.pde
     elseif weight_name == :pde
       supervised_weight = fixed_weights.supervised
-      bc_weight = fixed_weights.bc
       pde_weight = mid
     else
       error("Unknown weight_name: $(weight_name)")
@@ -72,7 +66,6 @@ function search(training_dataset, weight_name::Symbol, weight_range::Tuple{Int,I
       write(f, "Weight value tested: $(mid)\n\n")
       write(f, "Weight Configuration:\n")
       write(f, "  supervised_weight: $(supervised_weight)\n")
-      write(f, "  bc_weight: $(bc_weight)\n")
       write(f, "  pde_weight: $(pde_weight)\n\n")
       write(f, "Fixed Weights:\n")
       for (key, val) in pairs(fixed_weights)
@@ -99,7 +92,7 @@ function search(training_dataset, weight_name::Symbol, weight_range::Tuple{Int,I
       converted_dict = convert_plugboard_keys(ConvertSettings)
       settings = PINNSettings(5, 1234, converted_dict, 500, 500,
         num_supervised, N, 10, x_left, x_right,
-        supervised_weight, bc_weight, pde_weight, xs)
+        supervised_weight, pde_weight, xs)
       # Train the network
       println("  Training network...")
       p_trained, coeff_net, st = train_pinn(settings)

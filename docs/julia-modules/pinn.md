@@ -1,6 +1,6 @@
 # PINN.jl
 
-Core PINN implementation for learning power series coefficients.
+Core PINN implementation for learning either power-series coefficients or unified eigenvalue parameters.
 
 **Location:** `architectures/PINN.jl`
 
@@ -13,16 +13,17 @@ struct PINNSettings
     neuron_num::Int              # Neurons per hidden layer
     seed::Int                    # Random seed
     ode_matrices::Dict{Any,Any}  # ODE coefficient matrices
-    maxiters_adam::Int           # Adam iterations
+    maxiters_lbfgs::Int          # Adam iterations
     n_terms_for_power_series::Int # Degree N of power series
     num_supervised::Int          # Coefficients for supervision
     num_points::Int              # Collocation points
     x_left::Float32              # Domain left boundary
     x_right::Float32             # Domain right boundary
     supervised_weight::Float32   # Weight for supervised loss
-    bc_weight::Float32           # Weight for BC loss
     pde_weight::Float32          # Weight for PDE loss
     xs::Any                      # Collocation point locations
+    optimizer::String
+    representation::Symbol       # :power_series or :eigenvalue
 end
 ```
 
@@ -41,7 +42,7 @@ initialize_network(settings::PINNSettings; use_gpu::Bool=false) → (network, pa
 **Architecture:**
 - 4 hidden layers with configurable neuron count
 - Sigmoid activation function
-- Output layer sized for power series coefficients
+- Input/output layers are sized by `io_dims(settings)` for the selected representation
 
 When `use_gpu=true`, parameters are transferred to GPU via `CUDA.cu()`.
 
@@ -57,8 +58,16 @@ loss_fn(...) → (total_loss, loss_bc, loss_pde, loss_supervised)
 
 **Components:**
 - PDE residual loss (vectorized matrix multiply, GPU-compatible)
-- Boundary condition loss (dot products with precomputed power vectors)
-- Supervised coefficient loss (padded mask to avoid scalar indexing)
+- Boundary/initial-condition diagnostic loss
+- Supervised loss: coefficient-space for power series, solution-space for eigenvalue
+
+The optimized objective is:
+
+```julia
+pde_weight * num_supervised * pde + supervised_weight * supervised
+```
+
+BC/IC loss is returned and logged, but it is not part of the optimized objective.
 
 ---
 
@@ -67,7 +76,7 @@ loss_fn(...) → (total_loss, loss_bc, loss_pde, loss_supervised)
 Aggregates loss across all training examples.
 
 ```julia
-global_loss(...) → (mean_loss, state, aggregated_components)
+    global_loss(...) → (mean_loss, aggregated_components)
 ```
 
 ---
@@ -91,18 +100,18 @@ train_pinn(settings::PINNSettings, output_dir; on_milestone=nothing, batch_size=
 
 ---
 
-### `evaluate_solution(settings, p_trained, coeff_net, st, benchmark_dataset, data_directories)`
+### `evaluate_solution(settings, p_trained, coeff_net, st, benchmark_dataset, output_dir, run_id)`
 
-Evaluates trained model and generates plots.
+Evaluates a trained model and writes representation-aware JSON payloads.
 
 ```julia
-evaluate_solution(...) → nothing
+evaluate_solution(...) → (objective, results)
 ```
 
 **Outputs:**
-- Solution comparison plot
-- Coefficient comparison plot
-- Error analysis plot
+- Solution-space relative error
+- Power-series derivative coefficients or eigenvalue parameters
+- Optimized and diagnostic loss components
 
 ---
 
@@ -113,16 +122,17 @@ settings = PINNSettings(
     neuron_num = 50,
     seed = 42,
     ode_matrices = training_data,
-    maxiters_adam = 10000,
+    maxiters_lbfgs = 10000,
     n_terms_for_power_series = 10,
     num_supervised = 5,
     num_points = 20,
     x_left = 0.0f0,
     x_right = 1.0f0,
     supervised_weight = 0.1f0,
-    bc_weight = 1.0f0,
     pde_weight = 1.0f0,
-    xs = collect(range(0, 1, 20))
+    xs = collect(range(0, 1, 20)),
+    optimizer = "adam",
+    representation = :power_series
 )
 
 p_trained, net, st = train_pinn(settings, "output.csv")

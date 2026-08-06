@@ -63,7 +63,7 @@ coeff_net, p, st, _ = SafeTensorSnapshots.load_model(model_path)
 
 # --- Construct a minimal PINNSettings for loss_fn ------------------------------
 # loss_fn only reads: n_terms_for_power_series, num_supervised, num_points,
-# x_left, xs, pde_weight, bc_weight, supervised_weight, optimizer.
+# x_left, xs, pde_weight, supervised_weight, optimizer.
 # The other fields are dummy values (never accessed by loss_fn).
 dummy_ode_matrices = Dict{Any,Any}()
 
@@ -78,7 +78,6 @@ settings = PINNSettings(
   Float32(0.0),                    # x_left
   Float32(1.0),                    # x_right
   Float32(1.0),                    # supervised_weight
-  Float32(1.0),                    # bc_weight
   Float32(1.0),                    # pde_weight
   range(Float32(0.0), Float32(1.0), length=num_points),  # xs
   "adam",                          # optimizer

@@ -87,7 +87,6 @@ NEURON_COUNT = 100            # Hidden layer width
 MAXITERS = 10000              # Training iterations
 N = 10                        # Power series degree
 SUPERVISED_WEIGHT = 1.0f0     # Supervised loss weight
-BC_WEIGHT = 1.0f0             # Boundary condition weight
 PDE_WEIGHT = 1.0f0            # PDE residual weight
 ```
 
