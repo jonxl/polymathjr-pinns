@@ -81,12 +81,12 @@ Aggregates loss across all training examples.
 
 ---
 
-### `train_pinn(settings, output_dir; on_milestone=nothing, batch_size=0, snapshot_epoch_interval=10)`
+### `train_pinn(settings, output_dir; on_milestone=nothing, on_interrupt=nothing, batch_size=0, snapshot_epoch_interval=10)`
 
 Auto-detects GPU and trains with Adam. LBFGS is available but currently disabled pending convergence investigation. Returns CPU parameters regardless of training device. Writes `loss.csv` to `output_dir` after training.
 
 ```julia
-train_pinn(settings::PINNSettings, output_dir; on_milestone=nothing, batch_size=0, snapshot_epoch_interval=10) → (trained_params, network, state, run_id, history)
+train_pinn(settings::PINNSettings, output_dir; on_milestone=nothing, on_interrupt=nothing, batch_size=0, snapshot_epoch_interval=10) → (trained_params, network, state, run_id, history)
 ```
 
 **Behavior:**
@@ -97,6 +97,7 @@ train_pinn(settings::PINNSettings, output_dir; on_milestone=nothing, batch_size=
 - Writes loss history to `<output_dir>/loss.csv` (rows=iterations, columns: `iteration`, `total`, `bc`, `pde`, `supervised`)
 - Transfers trained parameters back to CPU before returning
 - Optionally calls `on_milestone(params, iteration, net, state, run_id)` at configured epoch boundaries for checkpointing
+- On `InterruptException`, calls `on_interrupt(params, iteration, net, state, run_id)` (if set) so the caller can save an interrupted-state checkpoint
 
 ---
 

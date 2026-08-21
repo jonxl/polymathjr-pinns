@@ -113,6 +113,28 @@ julia --project src/main.jl
 julia --project src/main.jl --help
 ```
 
+### Staged variant runs (one model per GPU)
+
+```bash
+# Dispatch variants across visible CUDA devices, render a per-GPU "cashier board"
+julia --project=. -t auto scripts/staged_variants.jl
+```
+
+See [`docs/julia-modules/tui.md`](docs/julia-modules/tui.md) and
+[`docs/julia-modules/variants.md`](docs/julia-modules/variants.md) for details.
+
+### Generalization experiments × representations
+
+```bash
+# Run transfer, extrapolate, range, showcase, gen_radius for both reps
+# concurrently via the per-GPU variant runner.
+julia --project=. -t auto scripts/generalization_variants.jl
+```
+
+Subset by experiment with `--experiments transfer,extrapolate`. See
+[`docs/julia-modules/generalization-variants.md`](docs/julia-modules/generalization-variants.md)
+for details.
+
 Runtime knobs (training mode, snapshots, bin size) are configurable via CLI flags — see [CLI Reference](docs/getting-started/cli-reference.md).
 
 To run a standalone experiment instead of the main pipeline:

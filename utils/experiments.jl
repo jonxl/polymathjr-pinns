@@ -161,9 +161,9 @@ function train_one(cfg::ExperimentConfig, dataset::Dict, tag::String;
   mkpath(dir)
   p, net, st, _, _ = train_pinn(settings, dir; run_id=tag,
                                 write_loss_csv=true, snapshot_epoch_interval=0)
-  PINN.SafeTensorSnapshots.save_safetensors_model(joinpath(dir, "model.safetensors"), p, net, settings.seed;
+  PINN.SafeTensorSnapshots.save_checkpoint(joinpath(dir, "model.checkpoint"), p, net, settings.seed;
+    representation=cfg.representation,
     extra_metadata=Dict{String,Any}(
-      "representation" => String(cfg.representation),
       "objective_components" => "pde + supervised",
       "diagnostic_components" => "bc"
     ))

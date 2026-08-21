@@ -57,7 +57,7 @@ function parse_commandline()
       arg_type = Int
       default = 100
     "--resume"
-      help = "Path to .safetensors model file for warm-start"
+      help = "Path to a .checkpoint (raw) or .safetensors model file for warm-start"
       arg_type = String
       default = nothing
     "--bins"
@@ -76,6 +76,10 @@ function parse_commandline()
       help = "Number of ODE examples to generate for the training dataset"
       arg_type = Int
       default = 1000
+    "--grid-mode"
+      help = "Grid search execution mode: parallel (batched across threads) or sequential (one config at a time)"
+      arg_type = String
+      default = "parallel"
   end
 
   return parse_args(s)
@@ -106,6 +110,11 @@ SNAPSHOT_PATH = something(parsed_args["resume"], "")
 BIN_SIZE = parsed_args["bins"]
 SNAPSHOT_EVERY_N_EPOCHS = parsed_args["epochs"]
 MAXITERS = parsed_args["maxiters"]
+
+GRID_MODE = Symbol(parsed_args["grid-mode"])
+if !(GRID_MODE in (:sequential, :parallel))
+  error("--grid-mode must be 'parallel' or 'sequential', got \"$(parsed_args["grid-mode"])\"")
+end
 
 # =========================================================================
 # Configuration: PINN Hyperparameters (in-file constants)
@@ -288,7 +297,8 @@ function run_training_sequence(batch_sizes::Array{Int})
       x_left=X_LEFT,
       x_right=X_RIGHT,
       xs=xs,
-      base_data_dir=output_dir
+      base_data_dir=output_dir,
+      mode=GRID_MODE,
     )
     @info "Grid search complete" best_objective=result.best_objective best_weights=result.best_weights
 

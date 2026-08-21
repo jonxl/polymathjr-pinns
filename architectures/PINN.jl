@@ -398,7 +398,7 @@ end
 We train the PINN on the training dataset and return the network
 =#
 
-function train_pinn(settings::PINNSettings, output_dir; run_id::String=generate_run_id(settings.optimizer), milestone_interval::Int=0, on_milestone::Union{Function,Nothing}=nothing, progress_callback::Union{Function,Nothing}=nothing, write_loss_csv::Bool=true, snapshot_path::Union{String,Nothing}=nothing, batch_size::Int=0, snapshot_epoch_interval::Int=10)
+function train_pinn(settings::PINNSettings, output_dir; run_id::String=generate_run_id(settings.optimizer), milestone_interval::Int=0, on_milestone::Union{Function,Nothing}=nothing, on_interrupt::Union{Function,Nothing}=nothing, progress_callback::Union{Function,Nothing}=nothing, write_loss_csv::Bool=true, snapshot_path::Union{String,Nothing}=nothing, batch_size::Int=0, snapshot_epoch_interval::Int=10)
   csv_file = joinpath(output_dir, "loss.csv")
 
   use_gpu = GPUUtils.is_gpu_available()
@@ -413,7 +413,7 @@ function train_pinn(settings::PINNSettings, output_dir; run_id::String=generate_
   end
 
   if snapshot_path !== nothing
-    coeff_net, p_ca, st, _ = SafeTensorSnapshots.load_model(snapshot_path)
+    coeff_net, p_ca, st, _ = SafeTensorSnapshots.load_any_model(snapshot_path)
     p_init_ca = use_gpu ? CUDA.cu(p_ca) : p_ca
     @info "Loaded model from snapshot: $snapshot_path"
   else
@@ -538,7 +538,12 @@ function train_pinn(settings::PINNSettings, output_dir; run_id::String=generate_
   catch e
     if e isa InterruptException
       interrupted = true
-      @warn "Training interrupted at iteration $(iter_count[]). Saving progress..."
+      it = iter_count[]
+      p_current = use_gpu ? ComponentArray(Array(getdata(latest_params[])), getaxes(latest_params[])) : latest_params[]
+      @warn "Training interrupted at iteration $it. Saving progress..."
+      if on_interrupt !== nothing
+        on_interrupt(p_current, it, coeff_net, st, run_id)
+      end
       (u = latest_params[],)  # mock result with latest params
     else
       rethrow(e)

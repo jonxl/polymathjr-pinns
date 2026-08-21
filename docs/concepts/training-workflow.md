@@ -145,12 +145,21 @@ Each iteration logs to `loss.csv` with the following columns:
 
 ## Checkpointing (Snapshots)
 
-Training saves the final trained MLP weights to `results/run-{id}/model.safetensors`.
+Training saves the final trained MLP weights to `results/run-{id}/model.checkpoint` in the
+native raw `.checkpoint` format (Julia `Serialization`).
 
-When checkpointing is enabled, intermediate weights are saved to `results/run-{id}/snapshots/iter-NNNNNNN.safetensors`. These checkpoints enable:
+When checkpointing is enabled, intermediate weights are saved to
+`results/run-{id}/snapshots/iter-NNNNNNN.checkpoint`. These checkpoints enable:
 
 - **Warm-start**: Resume training from a saved checkpoint with `--resume <path>`
 - **Replay**: Evaluate the model at each saved iteration without retraining
+
+The shared Hugging Face `.safetensors` format is produced on demand via the explicit
+conversion step:
+
+```bash
+julia --project=. scripts/convert_checkpoint.jl results/run-{id}/model.checkpoint
+```
 
 Snapshot behavior is controlled via CLI flags:
 
@@ -159,9 +168,13 @@ Snapshot behavior is controlled via CLI flags:
 | `--no-snap` | Disable snapshot saving entirely |
 | `--snap-every N` | Legacy iteration interval; mini-batch snapshots use `--epochs` |
 | `--epochs N` | Save after every N epochs in mini-batch mode (default: 10) |
-| `--resume <path>` | Warm-start from a `.safetensors` model/checkpoint file |
+| `--resume <path>` | Warm-start from a `.checkpoint` or `.safetensors` file |
 
-`--no-snap` disables intermediate checkpoints only. The final `model.safetensors` is still written.
+`--no-snap` disables intermediate checkpoints only. The final `model.checkpoint` is still written.
+
+If training is interrupted, the current weights are saved to
+`results/run-{id}/interrupted-iter-NNNNNNN.checkpoint`, and `training_results.json` records
+`"status": "interrupted"` with the iteration count.
 
 See the [CLI Reference](../getting-started/cli-reference.md) for all flags.
 

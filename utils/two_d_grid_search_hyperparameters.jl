@@ -19,6 +19,9 @@ using .GPUUtils
 include("../utils/helper_funcs.jl")
 using .helper_funcs
 
+include("../utils/tui.jl")
+using .TUI
+
 """
   GridSearchResult
   
@@ -125,14 +128,19 @@ function grid_search_2d(neuron_count, training_dataset, benchmark_dataset,
   num_supervised, N, x_left, x_right,
   xs,
   base_data_dir,
-  milestone_interval::Int=1000)
+  milestone_interval::Int=1000,
+  mode::Symbol=:parallel,
+  view::Union{TUI.GridView,Nothing}=nothing)
+
+  mode in (:sequential, :parallel) || error(
+    "grid_search_2d: mode must be :sequential or :parallel, got :$mode")
 
   # ---- Startup Banner ----
   gpu_name = GPUUtils.is_gpu_available() ? GPUUtils.get_device() : "none (CPU only)"
   vram_str = GPUUtils.is_gpu_available() ? "$(round(CUDA.available_memory() / 1024^3, digits=2)) GB free" : "N/A"
 
   println("="^60)
-  println("  2D GRID SEARCH — THREADED")
+  println("  2D GRID SEARCH — $(uppercase(String(mode)))")
   println("="^60)
   println("  Threads:    $(Threads.nthreads())")
   println("  GPU:        $(gpu_name)")
@@ -171,53 +179,97 @@ function grid_search_2d(neuron_count, training_dataset, benchmark_dataset,
   println("  Batch size: $(batch_size) configs/batch ($(num_batches) batches)")
   println("="^60)
 
+  # GridView: caller may pass one in (e.g. tests asserting cell state);
+  # else we build one here. Cell layout: row=j (weight2), col=i (weight1).
+  cells_view = view !== nothing ? view : TUI.GridView(num_points, num_points)
+
   # maxiters per PINN (must match the value in evaluate_weight_configuration)
   iters_per_pinn = 10000
 
-  # Process grid in batched parallel chunks
-  for (batch_num, batch) in enumerate(Iterators.partition(all_configs, batch_size))
-    # Shared progress bar for the entire batch — all threads advance it together
-    total_batch_iters = length(batch) * iters_per_pinn
-    batch_bar = Progress(total_batch_iters, desc="Batch $(batch_num)/$(num_batches) [$(length(batch)) PINNs]  ")
-
-    # Thread-safe callback: each PINN's iteration ticks the shared bar
-    shared_callback = function(state, l)
-      ProgressMeter.next!(batch_bar; showvalues=[(:loss, round(l, digits=6)), (:thread, Threads.threadid())])
-      return false
-    end
-
-    tasks = map(batch) do (i, w1, j, w2)
-      Threads.@spawn begin
+  if mode === :sequential
+    # ----- Sequential mode: one config at a time. The GridView shows a
+    # single moving cursor; no contention with other workers.
+    for (i, w1, j, w2) in all_configs
+      TUI.mark_running!(cells_view, j, i)
+      try
         weights = create_weight_tuple(weight1, w1, weight2, w2, fixed_weights)
-
         total_error, loss_history, eval_results, milestones = evaluate_weight_configuration(
           neuron_count, training_dataset, benchmark_dataset, weights,
           num_supervised, N, x_left, x_right, xs, base_data_dir;
-          progress_callback=shared_callback,
-          milestone_interval=milestone_interval
+          milestone_interval=milestone_interval,
         )
-
-        done = Threads.atomic_add!(completed, 1) + 1
-        # Compute linear index for pre-allocated storage
+        Threads.atomic_add!(completed, 1)
         linear_idx = (i - 1) * num_points + j
-        (j, i, total_error, loss_history, eval_results, weights, milestones, linear_idx)
+        objective_matrix[j, i] = total_error
+        all_loss_histories[linear_idx] = loss_history
+        all_config_results[linear_idx] = eval_results
+        all_milestones[linear_idx] = milestones
+        all_weights[linear_idx] = weights
+        TUI.mark_done!(cells_view, j, i, total_error)
+      catch e
+        TUI.mark_failed!(cells_view, j, i)
+        @error "Config ($(i),$(j)) failed" exception=(e, catch_backtrace())
       end
     end
+  else
+    # ----- Parallel (default): existing batched-parallel behavior with
+    # per-cell GridView marking layered on top.
+    # Process grid in batched parallel chunks
+    for (batch_num, batch) in enumerate(Iterators.partition(all_configs, batch_size))
+      # Shared progress bar for the entire batch — all threads advance it together
+      total_batch_iters = length(batch) * iters_per_pinn
+      batch_bar = Progress(total_batch_iters, desc="Batch $(batch_num)/$(num_batches) [$(length(batch)) PINNs]  ")
 
-    # Collect results from this batch
-    for task in tasks
-      j, i, objective_value, loss_history, eval_results, weights, milestones, linear_idx = fetch(task)
-      objective_matrix[j, i] = objective_value
-      all_loss_histories[linear_idx] = loss_history
-      all_config_results[linear_idx] = eval_results
-      all_milestones[linear_idx] = milestones
-      all_weights[linear_idx] = weights
+      # Thread-safe callback: each PINN's iteration ticks the shared bar
+      shared_callback = function(state, l)
+        ProgressMeter.next!(batch_bar; showvalues=[(:loss, round(l, digits=6)), (:thread, Threads.threadid())])
+        return false
+      end
+
+      # Mark cells running BEFORE dispatch so the GridView reflects the batch
+      for (i, _, j, _) in batch
+        TUI.mark_running!(cells_view, j, i)
+      end
+
+      tasks = map(batch) do (i, w1, j, w2)
+        Threads.@spawn begin
+          try
+            weights = create_weight_tuple(weight1, w1, weight2, w2, fixed_weights)
+            total_error, loss_history, eval_results, milestones = evaluate_weight_configuration(
+              neuron_count, training_dataset, benchmark_dataset, weights,
+              num_supervised, N, x_left, x_right, xs, base_data_dir;
+              progress_callback=shared_callback,
+              milestone_interval=milestone_interval,
+            )
+            Threads.atomic_add!(completed, 1)
+            linear_idx = (i - 1) * num_points + j
+            TUI.mark_done!(cells_view, j, i, total_error)
+            (j, i, total_error, loss_history, eval_results, weights, milestones, linear_idx)
+          catch e
+            TUI.mark_failed!(cells_view, j, i)
+            @error "Config ($(i),$(j)) failed" exception=(e, catch_backtrace())
+            (j, i, NaN, nothing, nothing, nothing, nothing, (i - 1) * num_points + j)
+          end
+        end
+      end
+
+      # Collect results from this batch
+      for task in tasks
+        j, i, objective_value, loss_history, eval_results, weights, milestones, linear_idx = fetch(task)
+        objective_matrix[j, i] = objective_value
+        if loss_history !== nothing
+          all_loss_histories[linear_idx] = loss_history
+          all_config_results[linear_idx] = eval_results
+          all_milestones[linear_idx] = milestones
+          all_weights[linear_idx] = weights
+        end
+      end
+
+      # Log batch completion
+      done_so_far = completed[]
+      pct = round(100.0 * done_so_far / total_configs, digits=1)
+      println("\n  Batch $(batch_num) complete — $(done_so_far)/$(total_configs) configs done ($(pct)%)")
     end
-
-    # Log batch completion
-    done_so_far = completed[]
-    pct = round(100.0 * done_so_far / total_configs, digits=1)
-    println("\n  Batch $(batch_num) complete — $(done_so_far)/$(total_configs) configs done ($(pct)%)")
   end
 
   # Post-hoc reduction: find best from completed matrix (no shared mutable state)

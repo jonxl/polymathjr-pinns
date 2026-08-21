@@ -21,8 +21,8 @@
 # Each reported as max |Δcoefficient| and max function error on [0,1].
 #
 # Usage:
-#   julia --project test/test_semigroup_generalization.jl [path/to/model.safetensors]
-# Default: newest results/run-*/model.safetensors
+#   julia --project test/test_semigroup_generalization.jl [path/to/model.checkpoint]
+# Default: newest results/run-*/model.checkpoint
 # =============================================================================
 
 using Test
@@ -41,13 +41,15 @@ canon(m) = Float32.(vec(m) ./ vec(m)[end])        # same convention as canonical
 
 # --- Locate the trained model ------------------------------------------------
 function newest_model()
-  candidates = String[]
-  for run_dir in filter(d -> startswith(d, "run-"), readdir("results"; join=false))
-    p = joinpath("results", run_dir, "model.safetensors")
-    isfile(p) && push!(candidates, p)
+  for ext in (".checkpoint", ".safetensors")
+    candidates = String[]
+    for run_dir in filter(d -> startswith(d, "run-"), readdir("results"; join=false))
+      p = joinpath("results", run_dir, "model$ext")
+      isfile(p) && push!(candidates, p)
+    end
+    isempty(candidates) || return sort(candidates; by=mtime)[end]
   end
-  isempty(candidates) && error("No results/run-*/model.safetensors found — train first (julia --project src/main.jl)")
-  return sort(candidates; by=mtime)[end]
+  error("No results/run-*/model.checkpoint found — train first (julia --project src/main.jl)")
 end
 
 model_path = isempty(ARGS) ? newest_model() : ARGS[1]

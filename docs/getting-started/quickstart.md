@@ -12,8 +12,8 @@ This will:
 1. Load ODE training dataset
 2. Initialize neural network
 3. Train with Adam optimizer
-4. Save checkpoint weights as `.safetensors` files when checkpointing is enabled
-5. Save the final trained MLP weights to `model.safetensors`
+4. Save checkpoint weights as `.checkpoint` files when checkpointing is enabled
+5. Save the final trained MLP weights to `model.checkpoint`
 6. Evaluate and save results
 
 Pass flags to customize the run without editing source:
@@ -23,7 +23,7 @@ Pass flags to customize the run without editing source:
 julia --project src/main.jl --no-snap --bins 0
 
 # Resume from a checkpoint
-julia --project src/main.jl --resume results/run-adam-02-26-26/snapshots/iter-0005000.safetensors
+julia --project src/main.jl --resume results/run-adam-02-26-26/snapshots/iter-0005000.checkpoint
 ```
 
 See the [CLI Reference](cli-reference.md) for all available flags.
@@ -36,11 +36,18 @@ Current training runs write under `results/run-{id}/`:
 
 ```
 results/run-adam-MM-DD-YY/
-├── model.safetensors          # final trained MLP weights
+├── model.checkpoint           # final trained MLP weights (raw format)
 ├── training_results.json      # metadata, final objective, coefficients, checkpoints
 ├── loss.csv                   # sampled loss history
 └── snapshots/
-    └── iter-NNNNNNN.safetensors  # optional checkpoint weights
+    └── iter-NNNNNNN.checkpoint   # optional checkpoint weights (raw format)
+```
+
+Checkpoints use the native raw `.checkpoint` format. Export to the shared Hugging Face
+`.safetensors` format on demand with:
+
+```bash
+julia --project=. scripts/convert_checkpoint.jl results/run-adam-MM-DD-YY/model.checkpoint
 ```
 
 ---
@@ -84,11 +91,12 @@ Closing the window automatically exits the Julia process.
 
 ```julia
 NEURON_COUNT = 100            # Hidden layer width
-MAXITERS = 10000              # Training iterations
-N = 10                        # Power series degree
+N = 20                        # Power series degree
 SUPERVISED_WEIGHT = 1.0f0     # Supervised loss weight
 PDE_WEIGHT = 1.0f0            # PDE residual weight
 ```
+
+Training iteration count is set via the `--maxiters` CLI flag (default `10000`), not a constant.
 
 ---
 

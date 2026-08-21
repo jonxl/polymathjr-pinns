@@ -61,7 +61,7 @@ run_training(settings, 10000, 100;
              batch_size=32, neuron_count=100, seed=1234)
 ```
 
-Writes `model.safetensors` for the final trained MLP, plus `training_results.json` with metadata, final results, and checkpoint history. Intermediate checkpoint weights are written under `snapshots/` when checkpointing is enabled.
+Writes `model.checkpoint` (raw `.checkpoint` format) for the final trained MLP, plus `training_results.json` with metadata, final results, and checkpoint history. Intermediate checkpoint weights are written under `snapshots/` as `.checkpoint` files when checkpointing is enabled. Export to `.safetensors` via `scripts/convert_checkpoint.jl`.
 
 ---
 

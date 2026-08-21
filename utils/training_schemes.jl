@@ -80,15 +80,18 @@ function run_training(settings::TrainingSchemesSettings, maxiters::Int, mileston
     # Collect checkpoint evaluations in memory
     milestones = NamedTuple[]
 
+    # Track interrupt state so we can mark the run and report the last checkpoint.
+    interrupted_at = Ref{Union{Nothing,Int}}(nothing)
+
     # Checkpoint callback — called by train_pinn at configured epoch boundaries.
     function on_checkpoint(p_current, iteration, coeff_net, st, _run_id)
       snapshot_dir = joinpath(output_dir, "snapshots")
       mkpath(snapshot_dir)
 
-      snapshot_path = joinpath(snapshot_dir, "iter-$(lpad(iteration, 7, '0')).safetensors")
-      save_safetensors_model(snapshot_path, p_current, coeff_net, seed;
+      checkpoint_path = joinpath(snapshot_dir, "iter-$(lpad(iteration, 7, '0')).checkpoint")
+      save_checkpoint(checkpoint_path, p_current, coeff_net, seed;
+        representation=representation, iteration=iteration,
         extra_metadata=Dict{String,Any}(
-          "representation" => String(representation),
           "objective_components" => "pde + supervised",
           "diagnostic_components" => "bc"
         ))
@@ -99,20 +102,37 @@ function run_training(settings::TrainingSchemesSettings, maxiters::Int, mileston
       @info "Checkpoint $iteration — error: $error"
     end
 
+    # Interrupt callback — called by train_pinn if training is interrupted.
+    function on_interrupt(p_current, iteration, coeff_net, st, _run_id)
+      interrupted_at[] = iteration
+      interrupt_path = joinpath(output_dir, "interrupted-iter-$(lpad(iteration, 7, '0')).checkpoint")
+      save_checkpoint(interrupt_path, p_current, coeff_net, seed;
+        representation=representation, iteration=iteration)
+      if isempty(milestones)
+        @warn "Interrupted at iteration $iteration — current weights saved to $interrupt_path. No scheduled checkpoints had been written yet."
+      else
+        last_iter = milestones[end].iteration
+        @warn "Interrupted at iteration $iteration — current weights saved to $interrupt_path. Last scheduled checkpoint: snapshots/iter-$(lpad(last_iter, 7, '0')).checkpoint"
+      end
+    end
+
     checkpoint_callback = checkpointing_enabled ? on_checkpoint : nothing
 
     # Train once, optionally saving checkpoint weights at epoch boundaries.
-    p_trained, coeff_net, st, _, history = train_pinn(pinn_settings, output_dir; run_id=run_id, milestone_interval=milestone_interval, on_milestone=checkpoint_callback, snapshot_path=snapshot_path, batch_size=batch_size, snapshot_epoch_interval=snapshot_epoch_interval)
+    p_trained, coeff_net, st, _, history = train_pinn(pinn_settings, output_dir; run_id=run_id, milestone_interval=milestone_interval, on_milestone=checkpoint_callback, on_interrupt=on_interrupt, snapshot_path=snapshot_path, batch_size=batch_size, snapshot_epoch_interval=snapshot_epoch_interval)
 
     # Final evaluation
     final_error, final_results = evaluate_solution(pinn_settings, p_trained, coeff_net, st, settings.benchmark_dataset["01"], output_dir, run_id; write_results_json=false)
     final_coeffs = length(final_results) > 0 ? final_results[end]["pinn_coefficients"] : Float64[]
 
-    # Save the final trained MLP weights as the primary Hugging Face artifact.
-    final_model_path = joinpath(output_dir, "model.safetensors")
-    save_safetensors_model(final_model_path, p_trained, coeff_net, seed;
+    # Save the final trained MLP weights in the native raw checkpoint format.
+    # The shared safetensors artifact is produced on demand via
+    # scripts/convert_checkpoint.jl (convert_to_safetensors).
+    final_iteration = isempty(milestones) ? nothing : milestones[end].iteration
+    final_model_path = joinpath(output_dir, "model.checkpoint")
+    save_checkpoint(final_model_path, p_trained, coeff_net, seed;
+      representation=representation, iteration=final_iteration,
       extra_metadata=Dict{String,Any}(
-        "representation" => String(representation),
         "objective_components" => "pde + supervised",
         "diagnostic_components" => "bc"
       ))
@@ -138,7 +158,10 @@ function run_training(settings::TrainingSchemesSettings, maxiters::Int, mileston
         "milestone_interval" => milestone_interval,
         "checkpoint_epoch_interval" => snapshot_epoch_interval,
         "checkpointing_enabled" => checkpointing_enabled,
-        "model_file" => "model.safetensors",
+        "model_file" => "model.checkpoint",
+        "checkpoint_format" => "raw-serialization-v1",
+        "status" => interrupted_at[] === nothing ? "completed" : "interrupted",
+        "interrupted_at_iteration" => interrupted_at[],
         "optimizer" => "adam",
         "representation" => String(representation),
         "seed" => seed,
@@ -160,7 +183,8 @@ function run_training(settings::TrainingSchemesSettings, maxiters::Int, mileston
       "final" => Dict(
         "objective" => Float64(final_error),
         "coefficients" => final_coeffs,
-        "model_file" => "model.safetensors"
+        "model_file" => "model.checkpoint",
+        "final_iteration" => final_iteration
       ),
       "milestones" => [
         Dict(

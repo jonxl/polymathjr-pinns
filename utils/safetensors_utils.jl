@@ -3,6 +3,7 @@ module SafeTensorSnapshots
 using JSON
 using ComponentArrays
 using Lux
+using Serialization
 import Random
 
 function _write_u64_le(io, value::UInt64)
@@ -207,6 +208,127 @@ function load_model(path::AbstractString)
   return coeff_net, p_ca, st, metadata
 end
 
-export save_safetensors_model, load_safetensors_model, load_model
+# ===========================================================================
+# Raw checkpoint format (Julia Serialization) — fast native save/load.
+# Training uses this format for checkpoints and resume; safetensors is only
+# produced by the explicit `convert_to_safetensors` export step.
+# ===========================================================================
+
+# Flat CPU Float32 vector of the ComponentArray's underlying data, handling
+# GPU-backed arrays transparently (Array(::CuArray) copies to host).
+function _flat_cpu(p_ca)
+  p_ca isa ComponentArray || (p_ca = ComponentArray(p_ca))
+  flat = getdata(p_ca)
+  return Vector{Float32}(Array(flat))
+end
+
+"""
+    save_checkpoint(path, p_ca, coeff_net, seed;
+                    representation=:power_series, iteration=nothing,
+                    extra_metadata=Dict())
+
+Write model weights in the native raw `.checkpoint` format (Julia Serialization).
+Stores the flat CPU Float32 weights plus architecture/seed/representation metadata.
+Fast to load — no JSON parse, no per-layer name traversal, no chain rebuild.
+"""
+function save_checkpoint(path::AbstractString, p_ca, coeff_net, seed::Int;
+                         representation=:power_series, iteration=nothing,
+                         extra_metadata::Dict=Dict{String,Any}())
+  architecture = _extract_architecture(coeff_net)
+
+  payload = Dict{String,Any}(
+    "format" => "polymathjr-pinns-checkpoint",
+    "version" => 1,
+    "architecture" => architecture,
+    "seed" => seed,
+    "representation" => String(representation),
+    "iteration" => iteration,
+    "flat" => _flat_cpu(p_ca),
+  )
+  for (k, v) in extra_metadata
+    payload[k] = v
+  end
+
+  mkpath(dirname(path))
+  serialize(path, payload)
+  return path
+end
+
+"""
+    load_checkpoint(path) -> (coeff_net, p_ca, st, metadata)
+
+Load a raw `.checkpoint` file. Rebuilds the chain from embedded architecture,
+regenerates the Lux state from the saved seed, and reconstructs the ComponentArray
+from the flat weights. Returns a ready-to-use model.
+"""
+function load_checkpoint(path::AbstractString)
+  payload = deserialize(path)
+  get(payload, "version", 1) == 1 || error("Unsupported checkpoint version: $(get(payload, "version", nothing))")
+
+  architecture = payload["architecture"]
+  seed = payload["seed"]
+  coeff_net = _build_chain(architecture)
+
+  rng = Random.default_rng()
+  Random.seed!(rng, seed)
+  p_template, st = Lux.setup(rng, coeff_net)
+  p_template_ca = ComponentArray(p_template)
+
+  p_ca = ComponentArray(Vector{Float32}(payload["flat"]), getaxes(p_template_ca))
+
+  metadata = Dict{String,Any}(
+    "format" => get(payload, "format", "polymathjr-pinns-checkpoint"),
+    "version" => get(payload, "version", 1),
+    "seed" => seed,
+    "representation" => get(payload, "representation", "power_series"),
+    "iteration" => get(payload, "iteration", nothing),
+  )
+  for (k, v) in payload
+    k in ("architecture", "seed", "format", "version", "representation", "iteration", "flat") && continue
+    metadata[k] = v
+  end
+
+  return coeff_net, p_ca, st, metadata
+end
+
+"""
+    convert_to_safetensors(checkpoint_path, safetensors_path) -> safetensors_path
+
+Explicit conversion step: load a raw `.checkpoint` and write it as a shared
+Hugging Face `.safetensors` file.
+"""
+function convert_to_safetensors(checkpoint_path::AbstractString, safetensors_path::AbstractString)
+  coeff_net, p_ca, _, metadata = load_checkpoint(checkpoint_path)
+  seed = metadata["seed"]
+
+  extra = Dict{String,Any}(
+    "representation" => get(metadata, "representation", "power_series"),
+    "objective_components" => "pde + supervised",
+    "diagnostic_components" => "bc",
+  )
+  for (k, v) in metadata
+    k in ("seed", "architecture", "format", "version") && continue
+    extra[string(k)] = v
+  end
+
+  return save_safetensors_model(safetensors_path, p_ca, coeff_net, seed; extra_metadata=extra)
+end
+
+"""
+    load_any_model(path) -> (coeff_net, p_ca, st, metadata)
+
+Dispatch by extension: `.checkpoint` loads via the raw path (fast), anything else
+falls back to the safetensors path (for old `.safetensors` files).
+"""
+function load_any_model(path::AbstractString)
+  if endswith(lowercase(path), ".checkpoint")
+    return load_checkpoint(path)
+  else
+    return load_model(path)
+  end
+end
+
+export save_safetensors_model, load_safetensors_model, load_model,
+       save_checkpoint, load_checkpoint, convert_to_safetensors, load_any_model
 
 end

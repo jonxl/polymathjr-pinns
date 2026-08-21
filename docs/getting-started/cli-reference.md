@@ -28,10 +28,12 @@ julia --project src/main.jl --help
 | `--data` | String | `"RANDOM"` | Dataset generation mode: `RANDOM` or `SPECIFIC` |
 | `--no-snap` | Flag | snapshots ON | Disable saving weight snapshots during training |
 | `--snap-every` | Int | `100` | Legacy iteration snapshot interval; epoch snapshots are controlled by `--epochs` in mini-batch mode |
-| `--resume` | String | `nothing` | Path to `.safetensors` model/checkpoint file for warm-start |
+| `--resume` | String | `nothing` | Path to a `.checkpoint` (raw) or `.safetensors` model file for warm-start |
 | `--bins` | Int | `32` | ODEs per bin. `0` = full batch (all ODEs per iteration) |
 | `--epochs` | Int | `10` | Save an intermediate checkpoint after every N complete epochs (mini-batch mode) |
 | `--maxiters` | Int | `10000` | Maximum number of training iterations (gradient updates) |
+| `--train-size` | Int | `1000` | Number of ODE examples to generate for the training dataset |
+| `--grid-mode` | String | `"parallel"` | Grid search execution mode: `parallel` (batched across threads) or `sequential` (one config at a time) |
 
 ---
 
@@ -45,7 +47,7 @@ julia --project src/main.jl
 julia --project src/main.jl --maxiters 500 --no-snap --bins 0
 
 # Resume from checkpoint
-julia --project src/main.jl --resume results/run-adam-02-26-26/snapshots/iter-0005000.safetensors
+julia --project src/main.jl --resume results/run-adam-02-26-26/snapshots/iter-0005000.checkpoint
 
 # Grid search mode
 julia --project src/main.jl --mode GRID_SEARCH
@@ -58,6 +60,24 @@ julia --project -t auto src/main.jl --mode GRID_SEARCH
 
 # Train the unified eigenvalue representation
 julia --project src/main.jl --representation eigenvalue
+```
+
+---
+
+## Checkpoint Format & Conversion
+
+Training writes checkpoints in the native raw `.checkpoint` format (Julia `Serialization`):
+`results/run-{id}/model.checkpoint` plus `results/run-{id}/snapshots/iter-NNNNNNN.checkpoint`
+when checkpointing is enabled.
+
+To export the shared Hugging Face `.safetensors` format, run the explicit conversion step:
+
+```bash
+# Convert a single checkpoint
+julia --project=. scripts/convert_checkpoint.jl results/run-{id}/model.checkpoint
+
+# Convert every checkpoint in a directory
+julia --project=. scripts/convert_checkpoint.jl results/run-{id}/snapshots/
 ```
 
 ---
@@ -107,9 +127,9 @@ PINN hyperparameters are stable architectural choices and remain as constants in
 |----------|---------|---------|
 | `NEURON_COUNT` | `100` | Hidden layer width |
 | `SEED` | `1234` | RNG seed |
-| `N` | `10` | Power series degree |
-| `NUM_SUPERVISED` | `10` | Supervised coefficients |
-| `NUM_POINTS` | `10` | Collocation points |
+| `N` | `20` | Power series degree |
+| `NUM_SUPERVISED` | `21` | Supervised coefficients |
+| `NUM_POINTS` | `22` | Collocation points |
 | `X_LEFT` / `X_RIGHT` | `0.0` / `1.0` | Domain bounds |
 | `SUPERVISED_WEIGHT` | `1.0` | Supervised loss weight |
 | `PDE_WEIGHT` | `1.0` | PDE residual loss weight |

@@ -16,13 +16,13 @@ using .loss_functions
 """
     load_and_infer(snapshot_path::String, ode_matrix::Matrix)
 
-Load model from a `.safetensors` file and run inference to get coefficients.
+Load model from a `.checkpoint` (raw) or `.safetensors` file and run inference to get coefficients.
 The file is fully self-contained — no external PINNSettings needed.
 
 Returns a vector of predicted coefficients.
 """
 function load_and_infer(snapshot_path::String, ode_matrix::Matrix)
-  coeff_net, p, st, metadata = SafeTensorSnapshots.load_model(snapshot_path)
+  coeff_net, p, st, metadata = SafeTensorSnapshots.load_any_model(snapshot_path)
   representation = Symbol(get(metadata, "representation", "power_series"))
   input = if representation === :eigenvalue
     tau, delta = tau_delta_from_alpha(vec(ode_matrix))
@@ -58,7 +58,7 @@ One step from a saved model + ODE matrix to the callable solution:
 inference (`load_and_infer`) composed with `construct_solution`.
 """
 function load_solution(snapshot_path::String, ode_matrix::Matrix)
-  _, _, _, metadata = SafeTensorSnapshots.load_model(snapshot_path)
+  _, _, _, metadata = SafeTensorSnapshots.load_any_model(snapshot_path)
   representation = Symbol(get(metadata, "representation", "power_series"))
   return construct_solution(load_and_infer(snapshot_path, ode_matrix);
                             representation=representation)
@@ -67,19 +67,19 @@ end
 """
     replay_snapshots(run_dir::String, ode_matrix::Matrix)
 
-Sweep every `.safetensors` snapshot in `run_dir`, run inference on each, and
+Sweep every `.checkpoint`/`.safetensors` snapshot in `run_dir`, run inference on each, and
 return how coefficient predictions evolve over training.
 No external settings needed — each file is self-contained.
 
 Returns a vector of named tuples: [(iteration=Int, coefficients=Vector{Float32}), ...]
 """
 function replay_snapshots(run_dir::String, ode_matrix::Matrix)
-  snapshot_files = filter(f -> endswith(f, ".safetensors"), readdir(run_dir))
+  snapshot_files = filter(f -> endswith(f, ".checkpoint") || endswith(f, ".safetensors"), readdir(run_dir))
   sort!(snapshot_files)
 
   results = NamedTuple[]
   for fname in snapshot_files
-    m = match(r"iter-(\d+)\.safetensors", fname)
+    m = match(r"iter-(\d+)\.(checkpoint|safetensors)", fname)
     m === nothing && continue
     iteration = parse(Int, m.captures[1])
 

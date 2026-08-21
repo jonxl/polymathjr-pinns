@@ -10,8 +10,8 @@
 # so the user can assess memorization quality.
 #
 # Usage:
-#   julia --project test/test_memorization.jl [path/to/model.safetensors]
-# Default: newest results/run-*/model.safetensors
+#   julia --project test/test_memorization.jl [path/to/model.checkpoint]
+# Default: newest results/run-*/model.checkpoint
 # =============================================================================
 
 using Test
@@ -29,13 +29,15 @@ using .PINN
 
 # --- Locate the trained model ------------------------------------------------
 function newest_model()
-  candidates = String[]
-  for run_dir in filter(d -> startswith(d, "run-"), readdir("results"; join=false))
-    p = joinpath("results", run_dir, "model.safetensors")
-    isfile(p) && push!(candidates, p)
+  for ext in (".checkpoint", ".safetensors")
+    candidates = String[]
+    for run_dir in filter(d -> startswith(d, "run-"), readdir("results"; join=false))
+      p = joinpath("results", run_dir, "model$ext")
+      isfile(p) && push!(candidates, p)
+    end
+    isempty(candidates) || return sort(candidates; by=mtime)[end]
   end
-  isempty(candidates) && error("No results/run-*/model.safetensors found — train first (julia --project src/main.jl)")
-  return sort(candidates; by=mtime)[end]
+  error("No results/run-*/model.checkpoint found — train first (julia --project src/main.jl)")
 end
 
 model_path = isempty(ARGS) ? newest_model() : ARGS[1]
@@ -59,7 +61,7 @@ num_supervised = min(10, n_coeffs)
 num_points = 10
 
 # --- Load the trained model ---------------------------------------------------
-coeff_net, p, st, _ = SafeTensorSnapshots.load_model(model_path)
+coeff_net, p, st, _ = SafeTensorSnapshots.load_any_model(model_path)
 
 # --- Construct a minimal PINNSettings for loss_fn ------------------------------
 # loss_fn only reads: n_terms_for_power_series, num_supervised, num_points,
