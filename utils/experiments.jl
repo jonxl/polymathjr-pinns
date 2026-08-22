@@ -556,17 +556,35 @@ end
 # ===========================================================================
 
 """
-    run_gen_radius(cfg, name; mode) → PanelSet
+    run_gen_radius(cfg, name; mode, eps_levels, Lmap, Ng) → PanelSet
 
 Generalization-radius experiment. Two modes:
   :disk   — train on compact disk of (τ,Δ), evaluate on full plane grid
-  :family — train one model per region, map area under ε-contour
+  :family — train one model per region, map area under each ε-contour
+
+`eps_levels` is a vector of relative-L2 thresholds (default
+`[1e-4, 1e-3, 1e-2, 1e-1, 1e0, 1e1]`). The heatmap draws a contour line at
+each level — the result is a **contour map showing the spread of error**
+rather than a single threshold line. The :family mode's bar chart reports
+generalization area (where rel-L2 < ε) at every level, so a single chart
+shows the area-vs-ε curve per region.
+
+`Ng` is the grid resolution per axis (Ng×Ng evaluation points);
+`Lmap` is the half-width of the (τ,Δ) plane window.
 """
+# Format ε as a compact label for bar-chart legends: 0.0001 → "0.0001", 1.0 → "1.0"
+# Rounds to 4 significant digits first so Float32 imprecision (e.g. 1e-4f0 =
+# 9.999999747378752e-5) doesn't surface in the label.
+function _fmt_eps(ε::Real)
+  ε == 0 && return "0"
+  return string(round(Float64(ε); sigdigits=4))
+end
+
 function run_gen_radius(cfg::ExperimentConfig, name::String;
                         mode::Symbol=:disk,
                         output_root::String="results",
                         rng_seed::Int=1234,
-                        eps_tol::Float32=0.10f0,
+                        eps_levels::Vector{Float32}=Float32[1e-4, 1e-3, 1e-2, 1e-1, 1e0, 1e1],
                         Lmap::Float32=4.0f0, Ng::Int=41)
   rng = MersenneTwister(rng_seed)
   panels = Panel[]
@@ -610,19 +628,20 @@ function run_gen_radius(cfg::ExperimentConfig, name::String;
       err_map[j, i] = LF.relative_l2(U_grid[:, idx], UT_grid[:, idx])
     end
 
-    # Heatmap panel
+    # Heatmap panel — multiple contour levels show the error spread
     t_axis = range(-Lmap, Lmap, length=Ng)
     d_axis = range(-Lmap, Lmap, length=Ng)
     push!(panels, heatmap_panel("genradius_map",
-      "Generalization radius ($(cfg.representation))",
+      "Generalization error map ($(cfg.representation))",
       err_map, string.(round.(d_axis, digits=1)), string.(round.(t_axis, digits=1));
       xlabel="τ", ylabel="Δ", log_color=true, annotate=false,
-      x_values=t_axis, y_values=d_axis, contour_levels=[eps_tol]))
+      x_values=t_axis, y_values=d_axis, contour_levels=eps_levels))
 
   elseif mode === :family
     regions = [:saddle, :stable_node, :unstable_node,
                :stable_spiral, :unstable_spiral, :center]
-    areas = Float32[]
+    # area_per_level[i][k] = area where rel-L2 < eps_levels[k] for region i
+    area_per_level = Vector{Vector{Float32}}(undef, length(regions))
 
     t_axis = range(-Lmap, Lmap, length=Ng)
     d_axis = range(-Lmap, Lmap, length=Ng)
@@ -646,33 +665,41 @@ function run_gen_radius(cfg::ExperimentConfig, name::String;
       U_grid = LF.batched_reconstruct(out, buf)
       UT_grid = LF.true_solutions(buf)
 
-      # Compute area under ε-contour
+      # Compute area at every ε level — one pass over the grid suffices.
       cell_area = (2Lmap / (Ng - 1))^2
-      area_under = 0.0f0
+      area_under = zeros(Float32, length(eps_levels))
       err_grid = zeros(Float32, Ng, Ng)
       for idx in 1:length(grid_ts)
         i2 = (idx - 1) % Ng + 1; j2 = (idx - 1) ÷ Ng + 1
         e = LF.relative_l2(U_grid[:, idx], UT_grid[:, idx])
         err_grid[j2, i2] = e
-        if e < eps_tol
-          area_under += cell_area
+        for (k, ε) in enumerate(eps_levels)
+          if e < ε
+            area_under[k] += cell_area
+          end
         end
       end
-      push!(areas, area_under)
+      area_per_level[i] = area_under
 
       push!(panels, heatmap_panel("genradius_family_$(reg)",
         "Error map — $(reg) ($(cfg.representation))",
         err_grid, string.(round.(d_axis, digits=1)), string.(round.(t_axis, digits=1));
         xlabel="τ", ylabel="Δ", log_color=true, annotate=false,
-        x_values=t_axis, y_values=d_axis, contour_levels=[eps_tol]))
+        x_values=t_axis, y_values=d_axis, contour_levels=eps_levels))
     end
 
-    # Bar chart of area per family
+    # Grouped bar chart: one bar per ε-level per region. Replaces the
+    # single-threshold "area where rel-L2 < ε" bar with a multi-level view
+    # so the area-vs-ε curve is visible across all regions at once.
+    level_series = [
+      (string("ε=", _fmt_eps(ε)), [area_per_level[i][k] for i in 1:length(regions)])
+      for (k, ε) in enumerate(eps_levels)
+    ]
     push!(panels, grouped_bar_panel("genradius_areas",
-      "Generalization area (< ε) per family ($(cfg.representation))",
+      "Generalization area at each ε — per family ($(cfg.representation))",
       String.(regions),
-      [("area", collect(areas))];
-      ylabel="area where rel-L2 < $(eps_tol)"))
+      level_series;
+      ylabel="area where rel-L2 < ε", log_y=false))
   else
     error("Unknown gen_radius mode: :$(mode). Expected :disk or :family.")
   end
@@ -680,7 +707,8 @@ function run_gen_radius(cfg::ExperimentConfig, name::String;
   return PanelSet("$name gen-radius $(mode) ($(cfg.representation))",
     Dict{String,Any}("representation" => String(cfg.representation),
                      "shape" => "gen_radius", "mode" => String(mode),
-                     "eps_tol" => eps_tol, "Lmap" => Lmap, "Ng" => Ng),
+                     "eps_levels" => collect(eps_levels),
+                     "Lmap" => Lmap, "Ng" => Ng),
     panels)
 end
 
