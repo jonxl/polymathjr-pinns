@@ -78,7 +78,7 @@ end
 
 function GeneralizationSpec(name::Symbol, representation::Symbol;
                             regions::Vector{Symbol}=REGIONS,
-                            Rmax::Int=6, Ng::Int=31,
+                            Rmax::Int=6, Ng::Int=81,
                             n_per_region::Int=200, maxiters::Int=3000)
   name in (:transfer, :extrapolate, :range, :showcase, :gen_radius) || error(
     "GeneralizationSpec: unknown experiment :$name; expected one of " *

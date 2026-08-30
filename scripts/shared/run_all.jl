@@ -20,10 +20,14 @@ include("../../utils/experiments.jl")
 using .Experiments
 import Random; Random.seed!(1234)
 
-isdir("data") || mkpath("data")
-
 const REGIONS = [:saddle, :stable_node, :unstable_node,
                  :stable_spiral, :unstable_spiral, :center]
+const MAXITERS = 1_000_000
+const CHECKPOINT_INTERVAL = 100_000
+const OUTPUT_ROOT = "results/dual-rep-adam-iter-1m"
+const DATA_DIR = joinpath(OUTPUT_ROOT, "data")
+
+mkpath(DATA_DIR)
 
 # ── Toggle which experiments to run ──
 const RUN = Dict(
@@ -36,47 +40,55 @@ const RUN = Dict(
 )
 
 for rep in [:power_series, :eigenvalue]
-    cfg = ExperimentConfig(; representation=rep)
+    cfg = ExperimentConfig(; representation=rep, maxiters=MAXITERS,
+                           checkpoint_interval=CHECKPOINT_INTERVAL)
     println("\n" * "="^60)
     println("  Representation: $rep")
     println("="^60)
 
     if RUN[:transfer]
         @info "Transfer: $rep"
-        ps = run_transfer(cfg, REGIONS, REGIONS, "batch_transfer"; rng_seed=1234)
-        save_experiment("data/batch_transfer_$(rep).json", ps)
+        ps = run_transfer(cfg, REGIONS, REGIONS, "batch_transfer";
+                          rng_seed=1234, output_root=OUTPUT_ROOT)
+        save_experiment(joinpath(DATA_DIR, "batch_transfer_$(rep).json"), ps)
     end
 
     if RUN[:extrapolate]
         @info "Extrapolate: $rep"
-        ps = run_extrapolate(cfg, REGIONS, 6, "batch_extrapolate")
-        save_experiment("data/batch_extrapolate_$(rep).json", ps)
+        ps = run_extrapolate(cfg, REGIONS, 6, "batch_extrapolate";
+                             output_root=OUTPUT_ROOT)
+        save_experiment(joinpath(DATA_DIR, "batch_extrapolate_$(rep).json"), ps)
     end
 
     if RUN[:range]
         @info "Cross-region range: $rep"
-        ps = run_cross_region_range(cfg, REGIONS, REGIONS, 6, "batch_range")
-        save_experiment("data/batch_range_$(rep).json", ps)
+        ps = run_cross_region_range(cfg, REGIONS, REGIONS, 6, "batch_range";
+                                    output_root=OUTPUT_ROOT)
+        save_experiment(joinpath(DATA_DIR, "batch_range_$(rep).json"), ps)
     end
 
     if RUN[:showcase]
         @info "Showcase: $rep"
-        ps = run_showcase(cfg, "batch_showcase")
-        save_experiment("data/batch_showcase_$(rep).json", ps)
+        ps = run_showcase(cfg, "batch_showcase"; output_root=OUTPUT_ROOT)
+        save_experiment(joinpath(DATA_DIR, "batch_showcase_$(rep).json"), ps)
     end
 
     if RUN[:gen_radius_disk]
         @info "Gen radius disk: $rep"
-        ps = run_gen_radius(cfg, "batch_genradius"; mode=:disk, Ng=31)
-        save_experiment("data/batch_genradius_disk_$(rep).json", ps)
+        ps = run_gen_radius(cfg, "batch_genradius"; mode=:disk, Ng=81,
+                            output_root=OUTPUT_ROOT)
+        save_experiment(joinpath(DATA_DIR, "batch_genradius_disk_$(rep).json"), ps)
     end
 
     if RUN[:gen_radius_family]
-        fam_cfg = ExperimentConfig(; representation=rep, n_per_region=100)
+        fam_cfg = ExperimentConfig(; representation=rep, n_per_region=100,
+                                   maxiters=MAXITERS,
+                                   checkpoint_interval=CHECKPOINT_INTERVAL)
         @info "Gen radius family: $rep"
-        ps = run_gen_radius(fam_cfg, "batch_genradius"; mode=:family, Ng=31)
-        save_experiment("data/batch_genradius_family_$(rep).json", ps)
+        ps = run_gen_radius(fam_cfg, "batch_genradius"; mode=:family, Ng=81,
+                            output_root=OUTPUT_ROOT)
+        save_experiment(joinpath(DATA_DIR, "batch_genradius_family_$(rep).json"), ps)
     end
 end
 
-@info "Batch experiment complete."
+@info "Batch experiment complete." output_root=OUTPUT_ROOT

@@ -16,12 +16,12 @@ for rep in [:power_series, :eigenvalue]
     fam_cfg = ExperimentConfig(; representation=rep, n_per_region=100)
 
     @info "Running gen_radius disk: $rep"
-    ps_disk = run_gen_radius(cfg, "shared_genradius"; mode=:disk, Ng=21)
+    ps_disk = run_gen_radius(cfg, "shared_genradius"; mode=:disk, Ng=81)
     path_disk = save_experiment("data/shared_genradius_disk_$(rep).json", ps_disk)
     @info "Saved: $path_disk"
 
     @info "Running gen_radius family: $rep"
-    ps_fam = run_gen_radius(fam_cfg, "shared_genradius"; mode=:family, Ng=21)
+    ps_fam = run_gen_radius(fam_cfg, "shared_genradius"; mode=:family, Ng=81)
     path_fam = save_experiment("data/shared_genradius_family_$(rep).json", ps_fam)
     @info "Saved: $path_fam"
 end

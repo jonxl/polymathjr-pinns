@@ -89,6 +89,7 @@ struct ExperimentConfig
   supervised_weight::Float32
   pde_weight::Float32
   seed::Int
+  checkpoint_interval::Int
 end
 
 function ExperimentConfig(; representation::Symbol=:power_series, N::Int=20,
@@ -97,10 +98,12 @@ function ExperimentConfig(; representation::Symbol=:power_series, N::Int=20,
                             x_left::Float32=0.0f0, x_right::Float32=1.0f0,
                             supervised_weight::Float32=1.0f0,
                             pde_weight::Float32=1.0f0,
-                            seed::Int=1234)
+                            seed::Int=1234,
+                            checkpoint_interval::Int=0)
+  checkpoint_interval >= 0 || error("checkpoint_interval must be non-negative")
   return ExperimentConfig(representation, N, neuron_count, maxiters, n_per_region,
                           num_points, x_left, x_right, supervised_weight,
-                          pde_weight, seed)
+                          pde_weight, seed, checkpoint_interval)
 end
 
 # Build PINNSettings for a dataset under a config. `seed_offset` keeps the
@@ -159,8 +162,32 @@ function train_one(cfg::ExperimentConfig, dataset::Dict, tag::String;
                           neuron_count=neuron_count, N=N)
   dir = joinpath(output_root, "exp-$tag")
   mkpath(dir)
+  function save_intermediate(p_current, iteration, coeff_net, _st, _run_id)
+    snapshot_dir = joinpath(dir, "snapshots")
+    mkpath(snapshot_dir)
+    path = joinpath(snapshot_dir, "iter-$(lpad(iteration, 7, '0')).checkpoint")
+    PINN.SafeTensorSnapshots.save_checkpoint(path, p_current, coeff_net, settings.seed;
+      representation=cfg.representation, iteration=iteration,
+      extra_metadata=Dict{String,Any}(
+        "objective_components" => "pde + supervised",
+        "diagnostic_components" => "bc",
+        "experiment_tag" => tag,
+      ))
+    @info "Saved intermediate checkpoint" path iteration
+  end
+  function save_interrupted(p_current, iteration, coeff_net, _st, _run_id)
+    path = joinpath(dir, "interrupted-iter-$(lpad(iteration, 7, '0')).checkpoint")
+    PINN.SafeTensorSnapshots.save_checkpoint(path, p_current, coeff_net, settings.seed;
+      representation=cfg.representation, iteration=iteration,
+      extra_metadata=Dict{String,Any}("experiment_tag" => tag))
+    @warn "Saved interrupted checkpoint" path iteration
+  end
+  checkpoint_callback = cfg.checkpoint_interval > 0 ? save_intermediate : nothing
   p, net, st, _, _ = train_pinn(settings, dir; run_id=tag,
-                                write_loss_csv=true, snapshot_epoch_interval=0)
+                                write_loss_csv=true,
+                                on_milestone=checkpoint_callback,
+                                on_interrupt=save_interrupted,
+                                snapshot_epoch_interval=cfg.checkpoint_interval)
   PINN.SafeTensorSnapshots.save_checkpoint(joinpath(dir, "model.checkpoint"), p, net, settings.seed;
     representation=cfg.representation,
     extra_metadata=Dict{String,Any}(
@@ -585,7 +612,8 @@ function run_gen_radius(cfg::ExperimentConfig, name::String;
                         output_root::String="results",
                         rng_seed::Int=1234,
                         eps_levels::Vector{Float32}=Float32[1e-4, 1e-3, 1e-2, 1e-1, 1e0, 1e1],
-                        Lmap::Float32=4.0f0, Ng::Int=41)
+                        eps_tol::Float64=0.10,
+                        Lmap::Float32=4.0f0, Ng::Int=81)
   rng = MersenneTwister(rng_seed)
   panels = Panel[]
 
@@ -634,8 +662,9 @@ function run_gen_radius(cfg::ExperimentConfig, name::String;
     push!(panels, heatmap_panel("genradius_map",
       "Generalization error map ($(cfg.representation))",
       err_map, string.(round.(d_axis, digits=1)), string.(round.(t_axis, digits=1));
-      xlabel="τ", ylabel="Δ", log_color=true, annotate=false,
-      x_values=t_axis, y_values=d_axis, contour_levels=eps_levels))
+      xlabel="τ", ylabel="Δ", log_color=true, annotate=false, floor_val=1e-4,
+      x_values=t_axis, y_values=d_axis, contour_levels=[eps_tol],
+      contour_color="red", contour_width=2))
 
   elseif mode === :family
     regions = [:saddle, :stable_node, :unstable_node,
@@ -684,8 +713,9 @@ function run_gen_radius(cfg::ExperimentConfig, name::String;
       push!(panels, heatmap_panel("genradius_family_$(reg)",
         "Error map — $(reg) ($(cfg.representation))",
         err_grid, string.(round.(d_axis, digits=1)), string.(round.(t_axis, digits=1));
-        xlabel="τ", ylabel="Δ", log_color=true, annotate=false,
-        x_values=t_axis, y_values=d_axis, contour_levels=eps_levels))
+        xlabel="τ", ylabel="Δ", log_color=true, annotate=false, floor_val=1e-4,
+        x_values=t_axis, y_values=d_axis, contour_levels=[eps_tol],
+        contour_color="red", contour_width=1.5, clims=(-4.0, 0.5)))
     end
 
     # Grouped bar chart: one bar per ε-level per region. Replaces the

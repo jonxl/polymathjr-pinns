@@ -44,3 +44,6 @@ scripts/archive/
 # OS
 .DS_Store
 Thumbs.db
+
+# Local development commands
+dev.txt

@@ -83,12 +83,19 @@ per-cell numeric annotation.
 - `annotate`   — draw the numeric value in each cell
 - `percent`    — format annotations as percentages
 - `yflip`      — first row at the top (matches the scripts' orientation)
+- `style`      — `"cells"` (discrete heatmap, default) or `"filled_contour"`
+                 (banded contourf, for continuous fields like error maps)
+- `interpolate`— bilinearly smooth the `"cells"` rendering
+- `contour_color`, `contour_width` — styling for the ε-contour overlay
+- `clims`      — fixed `(lo, hi)` colour limits, so sibling panels share a scale
 """
 function heatmap_panel(id, title, matrix, row_labels, col_labels;
                        xlabel = "", ylabel = "", log_color = true,
                        floor_val = 1e-20, annotate = true, percent = false,
                        yflip = true, colorbar_label = "log10 value", xrotation = 30,
-                       x_values = nothing, y_values = nothing, contour_levels = nothing)
+                       x_values = nothing, y_values = nothing, contour_levels = nothing,
+                       style = "cells", interpolate = false,
+                       contour_color = "white", contour_width = 2, clims = nothing)
   return Panel(:heatmap, id, title, xlabel, ylabel,
     Dict{String,Any}(
       "matrix" => [collect(Float64.(matrix[i, :])) for i in 1:size(matrix, 1)],
@@ -102,6 +109,9 @@ function heatmap_panel(id, title, matrix, row_labels, col_labels;
       "annotate" => annotate, "percent" => percent, "yflip" => yflip,
       "colorbar_label" => colorbar_label, "xrotation" => xrotation,
       "contour_levels" => contour_levels === nothing ? nothing : collect(Float64.(contour_levels)),
+      "style" => String(style), "interpolate" => interpolate,
+      "contour_color" => String(contour_color), "contour_width" => contour_width,
+      "clims" => clims === nothing ? nothing : collect(Float64.(clims)),
     ))
 end
 

@@ -134,13 +134,33 @@ function draw_heatmap!(pos, panel::Panel; theme = nothing)
   ax.xgridvisible = false
   ax.ygridvisible = false
 
-  hm = heatmap!(ax, xs, ys, vals; colormap = :viridis)
+  levels = get(panel.opts, "contour_levels", nothing)
+  contour_vals = (levels === nothing || isempty(levels)) ? nothing :
+    (log_color ? log10.(max.(Float64.(levels), floor_val)) : Float64.(levels))
+
+  # "filled_contour" bands the field between the contour levels; "cells" keeps
+  # the discrete per-point rectangles (right for categorical transfer matrices).
+  # contourf needs levels that span the data, so out-of-range levels are dropped
+  # and the data extremes are added as the outer band edges.
+  style = String(get(panel.opts, "style", "cells"))
+  hm = if style == "filled_contour" && contour_vals !== nothing
+    lo, hi = extrema(vals)
+    inner = sort!(filter(v -> lo < v < hi, collect(contour_vals)))
+    contourf!(ax, xs, ys, vals; levels = vcat(lo, inner, hi), colormap = :viridis)
+  else
+    heatmap!(ax, xs, ys, vals; colormap = :viridis,
+             interpolate = Bool(get(panel.opts, "interpolate", false)))
+  end
+  clims = get(panel.opts, "clims", nothing)
+  if clims !== nothing && length(clims) == 2
+    hm.colorrange[] = (Float64(clims[1]), Float64(clims[2]))
+  end
   Colorbar(pos[1, 2], hm; label = String(get(panel.opts, "colorbar_label", "log10 value")))
 
-  levels = get(panel.opts, "contour_levels", nothing)
-  if levels !== nothing && !isempty(levels)
-    contour_vals = log_color ? log10.(max.(Float64.(levels), floor_val)) : Float64.(levels)
-    contour!(ax, xs, ys, vals; levels = contour_vals, color = :white, linewidth = 2)
+  if contour_vals !== nothing
+    contour!(ax, xs, ys, vals; levels = contour_vals,
+             color = Symbol(get(panel.opts, "contour_color", "white")),
+             linewidth = Float64(get(panel.opts, "contour_width", 2)))
   end
 
   if get(panel.opts, "annotate", true) && !use_coords
