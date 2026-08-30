@@ -681,7 +681,7 @@ function batched_reconstruct(O::AbstractMatrix, buf::BatchEigBuffers)
   kpow = k .^ reshape(buf.kpow_exp, :, 1)
   C = buf.XE * (reshape(buf.cC, :, 1) .* kpow)
   S = buf.XO * (reshape(buf.cS, :, 1) .* kpow)
-  return exp.(buf.xs * mu) .* (A .* C .+ B .* S)
+  return exp.(reshape(buf.xs, :, 1) .* mu) .* (A .* C .+ B .* S)
 end
 
 """
@@ -746,7 +746,10 @@ function batched_eigenvalue_losses(O::AbstractMatrix, buf::BatchEigBuffers)
 
   v = A .* C .+ B .* S
   vp = A .* (k .* S) .+ B .* C          # v' = A·k·S + B·C
-  E = exp.(xs * mu)                     # (P × nb)
+  # Express this outer product as broadcasting. The matrix-multiplication
+  # pullback can otherwise dispatch to a scalar-indexed generic matvec for
+  # CuArray views, which is unsupported on the GPU.
+  E = exp.(reshape(xs, :, 1) .* mu)      # (P × nb)
 
   resid = E .* ((mu .^ 2 .+ k .- tau .* mu .+ delta) .* v .+
                 (2 .* mu .- tau) .* vp)
