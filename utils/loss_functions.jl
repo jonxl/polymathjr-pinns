@@ -463,14 +463,12 @@ const CS_COEFF_S_TUPLE = Tuple(CS_COEFF_S)
 @inline _s_series_value(z) = evalpoly(z, CS_COEFF_S_TUPLE)
 
 # Device-resident constants for one ODE under the eigenvalue representation.
-struct EigBuffers{V<:AbstractVector{Float32}, M<:AbstractMatrix{Float32},
-                  E<:AbstractVector{Int32}}
+struct EigBuffers{V<:AbstractVector{Float32}, M<:AbstractMatrix{Float32}}
   input_dev::V     # [τ, Δ] — the network input
   XE::M            # (P × PTERM+1) even powers  x^{2n}
   XO::M            # (P × PTERM+1) odd  powers  x^{2n+1}
   cC::V            # (PTERM+1,) 1/(2n)!
   cS::V            # (PTERM+1,) 1/(2n+1)!
-  kpow_exp::E      # (PTERM+1,) integer exponents 0…PTERM
   tau::Float32     # trace
   delta::Float32   # determinant
   a0::Float32      # u(0)
@@ -532,11 +530,6 @@ function precompute_eig_buffers(settings, use_gpu::Bool, to_device_fn)
   XO = to_device_fn(XO_cpu)
   cC = to_device_fn(CS_COEFF_C)
   cS = to_device_fn(CS_COEFF_S)
-  # Keep these as integers. Differentiating `k^p` with a floating-point `p`
-  # makes the generic power pullback evaluate log(k); that is NaN for the
-  # negative k values required by spirals and centers, even though p is
-  # mathematically an integer and fixed.
-  kpow_exp = to_device_fn(Int32.(collect(0:PTERM)))
 
   buffers = Dict{Any, EigBuffers}()
   for (alpha_matrix_key, series_coeffs) in settings.ode_matrices
@@ -547,7 +540,7 @@ function precompute_eig_buffers(settings, use_gpu::Bool, to_device_fn)
 
     buffers[alpha_matrix_key] = EigBuffers(
       to_device_fn(Float32[tau, delta]),
-      XE, XO, cC, cS, kpow_exp,
+      XE, XO, cC, cS,
       tau, delta, a0, a1,
       to_device_fn(eig_true_solution(tau, delta, a0, a1, xs_cpu)),
     )
@@ -618,8 +611,7 @@ end
 #
 # This contains no generic power operation in the differentiated GPU path.
 
-struct BatchEigBuffers{V<:AbstractVector{Float32}, M<:AbstractMatrix{Float32},
-                       E<:AbstractVector{Int32}}
+struct BatchEigBuffers{V<:AbstractVector{Float32}, M<:AbstractMatrix{Float32}}
   X::M            # (2 × nb) network inputs [τ; Δ]
   TAU::M          # (1 × nb)
   DELTA::M        # (1 × nb)
@@ -628,7 +620,6 @@ struct BatchEigBuffers{V<:AbstractVector{Float32}, M<:AbstractMatrix{Float32},
   XO::M           # (P × PTERM+1) odd powers  x^{2n+1}
   cC::V           # (PTERM+1,) 1/(2n)!
   cS::V           # (PTERM+1,) 1/(2n+1)!
-  kpow_exp::E     # (PTERM+1,) integer exponents 0…PTERM
   A0::M           # (1 × nb) u(0) targets
   A1::M           # (1 × nb) u'(0) targets
   UTRUE::M        # (P × nb) analytic solutions
@@ -671,7 +662,6 @@ function precompute_batch_eig_buffers(settings, items, use_gpu::Bool, to_device_
     to_device_fn(X_cpu), to_device_fn(TAU_cpu), to_device_fn(DELTA_cpu),
     to_device_fn(xs_cpu), to_device_fn(XE_cpu), to_device_fn(XO_cpu),
     to_device_fn(CS_COEFF_C), to_device_fn(CS_COEFF_S),
-    to_device_fn(Int32.(collect(0:PTERM))),
     to_device_fn(A0_cpu), to_device_fn(A1_cpu), to_device_fn(UTRUE_cpu),
     P, nb,
   )
@@ -733,7 +723,7 @@ solutions, which are the costliest part of the eigenvalue buffers.
 function select_bin(buf::BatchEigBuffers, idx)
   return BatchEigBuffers(
     buf.X[:, idx], buf.TAU[:, idx], buf.DELTA[:, idx],
-    buf.xs, buf.XE, buf.XO, buf.cC, buf.cS, buf.kpow_exp,
+    buf.xs, buf.XE, buf.XO, buf.cC, buf.cS,
     buf.A0[:, idx], buf.A1[:, idx], buf.UTRUE[:, idx],
     buf.num_points, length(idx),
   )
