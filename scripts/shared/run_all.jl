@@ -7,6 +7,7 @@ using Dates
 using JSON
 using CUDA
 using Zygote
+using ProgressMeter
 
 include("../../architectures/PINN.jl")
 using .PINN
@@ -26,7 +27,7 @@ const OUTPUT_ROOT = joinpath("results/dual-representation-10m", RUN_NAME)
 const TRAIN_SIZE = 10_000_000
 const VALIDATION_SIZE = 500_000
 const TEST_SIZE = 1_000_000
-const BATCH_SIZE = 8_192
+const BATCH_SIZE = 16_384
 const EPOCHS = 100
 const CHECKPOINT_EPOCH_INTERVAL = 5
 const N = 20
@@ -38,6 +39,13 @@ const TEST_SEED = DATASET_SEED + 20_000
 const RUN_GLOBAL_MODELS = true
 const RUN_FAMILY_MODELS = true
 const GPU_COUNT = 8
+
+# Live display backend: "progress" (ProgressMeter, one bar per GPU, offset-
+# stacked) or "tui" (the hand-rolled TUI.GPUBoard). Select with
+# DUAL_DISPLAY=tui julia ... scripts/shared/run_all.jl
+const DISPLAY_MODE = get(ENV, "DUAL_DISPLAY", "progress")
+DISPLAY_MODE in ("tui", "progress") ||
+  error("DUAL_DISPLAY must be \"tui\" or \"progress\", got $(repr(DISPLAY_MODE))")
 
 const TRAIN_SPLIT = CanonicalODESplit(:train, TRAIN_SIZE, TRAIN_SEED, N;
   shuffle_seed=SHUFFLE_SEED, regions=REGIONS)
@@ -138,9 +146,67 @@ function dummy_dataset(split, region=nothing)
   return Dict(item)
 end
 
+# ---------------------------------------------------------------------------
+# Display abstraction: TUI.GPUBoard vs ProgressMeter bars. Each call site
+# below dispatches on the board's type, so train_model/run_all_gpus stay
+# backend-agnostic; only these functions know about TUI vs ProgressMeter.
+# ---------------------------------------------------------------------------
+
+function make_display(device_labels::Vector{String})
+  DISPLAY_MODE == "tui" && return TUI.GPUBoard(device_labels)
+  bars = [ProgressMeter.Progress(1; desc="$(dev) ", offset=i - 1, showspeed=true)
+          for (i, dev) in enumerate(device_labels)]
+  for i in eachindex(bars)
+    ProgressMeter.update!(bars[i], 0; showvalues=[(:job, "idle")])
+  end
+  return bars
+end
+
+display_skip!(board::TUI.GPUBoard, slot, dev, scope_name, representation, maxiters) =
+  TUI.update!(board, slot; variant="$(scope_name)-$(representation) already complete ✓",
+              iter=maxiters, max_iter=maxiters)
+function display_skip!(bars::Vector{ProgressMeter.Progress}, slot, dev, scope_name, representation, maxiters)
+  bars[slot] = ProgressMeter.Progress(maxiters; desc="$(dev) ", offset=slot - 1, showspeed=true)
+  ProgressMeter.update!(bars[slot], maxiters;
+    showvalues=[(:job, "$(scope_name)-$(representation) already complete ✓"),
+                (:epoch, "$(EPOCHS)/$(EPOCHS)")])
+end
+
+function display_start(board::TUI.GPUBoard, slot, dev, scope_name, representation, maxiters, batches)
+  TUI.update!(board, slot; variant="$(scope_name)-$(representation)",
+              iter=0, max_iter=maxiters, loss=Float32(NaN))
+  return (state, loss) -> begin
+    TUI.update!(board, slot; iter=Int(state.iter), max_iter=maxiters, loss=Float32(loss))
+    false
+  end
+end
+function display_start(bars::Vector{ProgressMeter.Progress}, slot, dev, scope_name, representation, maxiters, batches)
+  bars[slot] = ProgressMeter.Progress(maxiters; desc="$(dev) ", offset=slot - 1, showspeed=true)
+  return (state, loss) -> begin
+    iter = Int(state.iter)
+    epoch = iter ÷ batches
+    ProgressMeter.update!(bars[slot], iter;
+      showvalues=[(:job, "$(scope_name)-$(representation)"),
+                  (:epoch, "$(epoch)/$(EPOCHS)"),
+                  (:loss, round(Float32(loss); digits=6))])
+    false
+  end
+end
+
+display_finish!(board::TUI.GPUBoard, slot, scope_name, representation, maxiters) =
+  TUI.update!(board, slot; variant="$(scope_name)-$(representation) ✓", iter=maxiters, max_iter=maxiters)
+display_finish!(bars::Vector{ProgressMeter.Progress}, slot, scope_name, representation, maxiters) =
+  ProgressMeter.finish!(bars[slot];
+    showvalues=[(:job, "$(scope_name)-$(representation) ✓"), (:epoch, "$(EPOCHS)/$(EPOCHS)")])
+
+display_fail!(board::TUI.GPUBoard, slot, label) = TUI.update!(board, slot; variant=label)
+display_fail!(bars::Vector{ProgressMeter.Progress}, slot, label) =
+  ProgressMeter.finish!(bars[slot]; showvalues=[(:job, label)])
+
 function train_model(representation::Symbol, scope::Symbol;
                      region::Union{Symbol,Nothing}=nothing,
-                     board::Union{TUI.GPUBoard,Nothing}=nothing,
+                     board::Union{TUI.GPUBoard,Vector{ProgressMeter.Progress},Nothing}=nothing,
+                     device_labels::Union{Vector{String},Nothing}=nothing,
                      gpu_slot::Int=1)
   count = region === nothing ? TRAIN_SPLIT.size : family_size(TRAIN_SPLIT, region)
   batches = cld(count, BATCH_SIZE)
@@ -163,8 +229,7 @@ function train_model(representation::Symbol, scope::Symbol;
   if isfile(final_model_path)
     @info "Skipping completed model" representation scope=scope_name path=final_model_path
     if board !== nothing
-      TUI.update!(board, gpu_slot; variant="$(scope_name)-$(representation) already complete ✓",
-                  iter=maxiters, max_iter=maxiters)
+      display_skip!(board, gpu_slot, device_labels[gpu_slot], scope_name, representation, maxiters)
     end
     return final_model_path
   end
@@ -222,17 +287,8 @@ function train_model(representation::Symbol, scope::Symbol;
   end
 
   @info "Starting matched model" representation scope=scope_name count batches epochs=EPOCHS maxiters
-  progress_callback = if board === nothing
-    nothing
-  else
-    TUI.update!(board, gpu_slot; variant="$(scope_name)-$(representation)",
-                iter=0, max_iter=maxiters, loss=Float32(NaN))
-    (state, loss) -> begin
-      TUI.update!(board, gpu_slot; iter=Int(state.iter), max_iter=maxiters,
-                  loss=Float32(loss))
-      false
-    end
-  end
+  progress_callback = board === nothing ? nothing :
+    display_start(board, gpu_slot, device_labels[gpu_slot], scope_name, representation, maxiters, batches)
   p, net, st, _, _ = train_pinn(
     settings, output_dir;
     run_id="dual-$(scope_name)-$(representation)",
@@ -251,8 +307,9 @@ function train_model(representation::Symbol, scope::Symbol;
       representation=representation, iteration=maxiters,
       extra_metadata=common_metadata(EPOCHS, maxiters),
     )
-    board !== nothing && TUI.update!(board, gpu_slot;
-      variant="$(scope_name)-$(representation) ✓", iter=maxiters, max_iter=maxiters)
+    if board !== nothing
+      display_finish!(board, gpu_slot, scope_name, representation, maxiters)
+    end
   end
 end
 
@@ -319,7 +376,8 @@ function run_all_gpus(jobs)
   @info "Eigenvalue GPU gradient preflight passed"
 
   device_labels = ["GPU $(i - 1) ($(CUDA.name(selected_devices[i])))" for i in 1:GPU_COUNT]
-  board = TUI.GPUBoard(device_labels)
+  @info "Live display" mode=DISPLAY_MODE
+  board = make_display(device_labels)
   queue = Channel{NamedTuple}(length(jobs))
   foreach(job -> put!(queue, job), jobs)
   close(queue)
@@ -332,10 +390,10 @@ function run_all_gpus(jobs)
       for job in queue
         try
           train_model(job.representation, job.scope;
-                      region=job.region, board=board, gpu_slot=slot)
+                      region=job.region, board=board, device_labels=device_labels, gpu_slot=slot)
         catch err
-          TUI.update!(board, slot;
-            variant="$(job.region === nothing ? "global" : job.region)-$(job.representation) FAILED")
+          display_fail!(board, slot,
+            "$(job.region === nothing ? "global" : job.region)-$(job.representation) FAILED")
           bt = catch_backtrace()
           @error "Dual-representation model failed" gpu=slot job exception=(err, bt)
           put!(failures, (job=job, error=err, backtrace=bt))

@@ -43,7 +43,18 @@ const INV_FACT = Float32.(1.0 ./ factorial.(big.(0:40)))
 # The dataset stores derivative-basis coefficients a_n = u⁽ⁿ⁾(0); they are
 # converted via ψ_n = a_n / n! at load time. ψ_n stays Float32-safe at large N
 # (|ψ_n| = |r|ⁿ/n! is bounded) where a_n = rⁿ overflows Float32 when squared.
-monomial_from_derivative(series) = Float32[series[i] / factorial(big(i - 1)) for i in 1:length(series)]
+#
+# Reuses the precomputed INV_FACT table rather than calling factorial(big(...))
+# per coefficient: this runs once per ODE inside precompute_batch_buffers,
+# which streaming training rebuilds every iteration — recomputing BigInt
+# factorials there was the dominant GMP/GC allocation source under concurrent
+# multi-GPU load and a repeat crash site in libgmp/mpfr.
+function monomial_from_derivative(series)
+  n = length(series)
+  n <= length(INV_FACT) || error(
+    "monomial_from_derivative: series length $n exceeds precomputed INV_FACT table (max $(length(INV_FACT)))")
+  return Float32[series[i] * INV_FACT[i] for i in 1:n]
+end
 
 # d^k/dx^k xᵐ = m·(m-1)⋯(m-k+1)·x^{m-k} — the falling factorial (1 for k = 0)
 falling_factorial(m::Int, k::Int) = k == 0 ? 1.0f0 : Float32(prod(m - t for t in 0:k-1))
