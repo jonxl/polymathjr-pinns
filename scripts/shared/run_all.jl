@@ -250,10 +250,14 @@ write_run_manifests()
 
 function build_jobs()
   jobs = NamedTuple[]
-  for representation in (:power_series, :eigenvalue)
-    RUN_GLOBAL_MODELS && push!(jobs, (representation=representation, scope=:global, region=nothing))
-    if RUN_FAMILY_MODELS
-      for region in REGIONS
+  if RUN_GLOBAL_MODELS
+    for representation in (:power_series, :eigenvalue)
+      push!(jobs, (representation=representation, scope=:global, region=nothing))
+    end
+  end
+  if RUN_FAMILY_MODELS
+    for region in REGIONS
+      for representation in (:power_series, :eigenvalue)
         push!(jobs, (representation=representation, scope=:family, region=region))
       end
     end
@@ -290,6 +294,20 @@ function run_all_gpus(jobs)
           TUI.update!(board, slot;
             variant="$(job.region === nothing ? "global" : job.region)-$(job.representation) FAILED")
           put!(failures, (job=job, error=err, backtrace=catch_backtrace()))
+        finally
+          # All persisted checkpoints contain CPU weights. Finish outstanding
+          # kernels, collect model/batch objects, then return cached device
+          # allocations to CUDA before this worker accepts its next model.
+          try
+            CUDA.synchronize()
+          catch
+          end
+          GC.gc(true)
+          try
+            CUDA.reclaim()
+          catch reclaim_error
+            @warn "Could not fully reclaim CUDA memory after model job" gpu=slot exception=reclaim_error
+          end
         end
       end
     end)

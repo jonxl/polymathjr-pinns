@@ -21,6 +21,9 @@ the authoritative `config.md`, `config.json`, and split manifests into
 - Two global models and twelve family-specific models
 - Eight GPUs used concurrently, with one worker and at most one active model
   per GPU; remaining model jobs wait in a shared queue
+- Power-series/eigenvalue jobs are queued as matched global/family pairs; after
+  each model is checkpointed, its worker synchronizes and reclaims cached CUDA
+  memory before taking the next queued model
 
 Each checkpoint records its dataset identifier, representation, scope, family,
 epoch, optimizer-update count, example exposures, batch size, and series degree.
