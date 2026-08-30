@@ -263,13 +263,15 @@ end
 
 function run_all_gpus(jobs)
   CUDA.functional() || error("The 10M run requires CUDA, but CUDA.functional() is false")
-  available = CUDA.ndevices()
+  devices = collect(CUDA.devices())
+  available = length(devices)
   available >= GPU_COUNT || error("The run requires $(GPU_COUNT) GPUs, but CUDA.jl sees only $(available)")
   Threads.nthreads() >= GPU_COUNT || error(
     "The run requires at least $(GPU_COUNT) Julia threads; launch with `julia --project=. -t $(GPU_COUNT) scripts/shared/run_all.jl`"
   )
 
-  device_labels = ["GPU $(i - 1) ($(CUDA.name(CUDA.device(i - 1))))" for i in 1:GPU_COUNT]
+  selected_devices = devices[1:GPU_COUNT]
+  device_labels = ["GPU $(i - 1) ($(CUDA.name(selected_devices[i])))" for i in 1:GPU_COUNT]
   board = TUI.GPUBoard(device_labels)
   queue = Channel{NamedTuple}(length(jobs))
   foreach(job -> put!(queue, job), jobs)
@@ -279,7 +281,7 @@ function run_all_gpus(jobs)
   workers = Task[]
   for slot in 1:GPU_COUNT
     push!(workers, Threads.@spawn begin
-      CUDA.device!(slot - 1)
+      CUDA.device!(selected_devices[slot])
       for job in queue
         try
           train_model(job.representation, job.scope;

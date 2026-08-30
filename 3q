@@ -1,0 +1,41 @@
+# Dual-representation experiment runbook
+# Run commands from the repository root.
+
+# One-time CUDA.jl setup for the NVIDIA B200 host.
+env -u LD_LIBRARY_PATH LD_PRELOAD=/lib64/libcuda.so.1:/lib64/libnvidia-ptxjitcompiler.so.1 julia --project=. -e 'using Pkg; Pkg.add(Pkg.PackageSpec(name="CUDA", version=v"5.11.3"); preserve=Pkg.PRESERVE_NONE); Pkg.resolve(); Pkg.precompile(); Pkg.status("CUDA")'
+
+env -u LD_LIBRARY_PATH LD_PRELOAD=/lib64/libcuda.so.1:/lib64/libnvidia-ptxjitcompiler.so.1 julia --project=. -e 'using CUDA; CUDA.set_runtime_version!(v"13.1")'
+
+# Restart Julia after changing the CUDA runtime preference.
+
+# CUDA preflight before every long experiment run.
+nvidia-smi && env -u LD_LIBRARY_PATH LD_PRELOAD=/lib64/libcuda.so.1:/lib64/libnvidia-ptxjitcompiler.so.1 julia --project=. -e 'using CUDA; CUDA.versioninfo(); @assert CUDA.functional(); x=CUDA.ones(Float32, 1024); CUDA.@sync x .*= 2; @assert Array(x)[1] == 2f0; println("CUDA kernel preflight passed on ", CUDA.name(CUDA.device()))'
+
+# Train the reusable dual-representation models.
+#
+# Shared canonical splits:
+#   training:   10,000,000 ODEs
+#   validation:    500,000 ODEs
+#   final test:  1,000,000 ODEs
+#
+# Training standard:
+#   batch size: 8,192
+#   epochs: 100
+#   checkpoints: epochs 5, 10, ..., 95
+#   final model: epoch 100
+#   models: 2 global + 12 family-specific = 14
+#   final checkpoint names include dense-MLP parameter count
+#   dense MLP inputs: identical (tau, delta) for both representations
+#   default seeds: dataset=10001, shuffle=40001, model initialization=1234
+#
+# Results and configuration are written beneath:
+#   results/dual-representation-10m/
+
+env -u LD_LIBRARY_PATH DUAL_DATASET_SEED=10001 DUAL_SHUFFLE_SEED=40001 DUAL_MODEL_SEED=1234 LD_PRELOAD=/lib64/libcuda.so.1:/lib64/libnvidia-ptxjitcompiler.so.1 julia --project=. -t 8 scripts/shared/run_all.jl
+
+# Research replicate example: change seeds without overwriting the default run.
+# env -u LD_LIBRARY_PATH DUAL_DATASET_SEED=10002 DUAL_SHUFFLE_SEED=40002 DUAL_MODEL_SEED=1235 LD_PRELOAD=/lib64/libcuda.so.1:/lib64/libnvidia-ptxjitcompiler.so.1 julia --project=. -t 8 scripts/shared/run_all.jl
+
+# Render charts using frozen checkpoints. This performs inference only.
+# Contours use epsilon = 10^-4, 10^-3, 10^-2, 10^-1, and 10^0.
+julia --project=. scripts/charts/dual_representation_study.jl results/dual-representation-10m/dataset-10001-shuffle-40001-model-1234 charts/dual-representation-study
