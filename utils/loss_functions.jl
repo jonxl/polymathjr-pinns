@@ -451,6 +451,16 @@ const PTERM = 14
 # Series coefficients: C = Σ k^n x^{2n}/(2n)!,  S = Σ k^n x^{2n+1}/(2n+1)!
 const CS_COEFF_C = Float32[1 / factorial(big(2n)) for n in 0:PTERM]
 const CS_COEFF_S = Float32[1 / factorial(big(2n + 1)) for n in 0:PTERM]
+const CS_COEFF_C_TUPLE = Tuple(CS_COEFF_C)
+const CS_COEFF_S_TUPLE = Tuple(CS_COEFF_S)
+
+# Evaluate the two entire functions with Horner's rule in z = k*x^2. Keeping
+# the coefficients in isbits tuples lets these scalar functions compile inside
+# a CUDA broadcast kernel. This deliberately avoids the generic `k .^ p`
+# pullback, which can generate non-finite derivatives for k < 0 on CUDA even
+# when p contains exact integers.
+@inline _c_series_value(z) = evalpoly(z, CS_COEFF_C_TUPLE)
+@inline _s_series_value(z) = evalpoly(z, CS_COEFF_S_TUPLE)
 
 # Device-resident constants for one ODE under the eigenvalue representation.
 struct EigBuffers{V<:AbstractVector{Float32}, M<:AbstractMatrix{Float32},
@@ -549,8 +559,9 @@ end
 # Vectorized as (P × PTERM+1) * (PTERM+1,) matvecs — one differentiable op each,
 # no scalar indexing, so this is safe under Zygote on both CPU and GPU.
 function _cs_series(k, buf::EigBuffers)
-  kpow = k .^ buf.kpow_exp                 # broadcast over a constant exponent vector
-  return (buf.XE * (buf.cC .* kpow), buf.XO * (buf.cS .* kpow))
+  x = buf.XO[:, 1]
+  z = k .* x .* x
+  return (_c_series_value.(z), x .* _s_series_value.(z))
 end
 
 """
@@ -599,13 +610,13 @@ end
 # ---------------------------------------------------------------------------
 #
 # Same factorization idea as the batched power-series path: every per-ODE
-# quantity becomes a 1×nb row, every basis matrix stays shared. The C/S power
-# series batches naturally because k enters only as k^n:
+# quantity becomes a 1×nb row. The C/S series are evaluated pointwise using
+# Horner's rule in z = k*x^2:
 #
-#     kpow[n, b] = k[b]^n            (PTERM+1 × nb)
-#     C = XE · (cC ⊙ kpow)           (P × nb)
+#     C(k,x) = evalpoly(k*x^2, cC)
+#     S(k,x) = x*evalpoly(k*x^2, cS)
 #
-# so one bin costs one network call plus two matmuls, independent of nb.
+# This contains no generic power operation in the differentiated GPU path.
 
 struct BatchEigBuffers{V<:AbstractVector{Float32}, M<:AbstractMatrix{Float32},
                        E<:AbstractVector{Int32}}
@@ -684,10 +695,11 @@ batched_reconstruct(A::AbstractMatrix, buf::BatchBuffers) = buf.D[1] * A
 function batched_reconstruct(O::AbstractMatrix, buf::BatchEigBuffers)
   mu = view(O, 1:1, :); k = view(O, 2:2, :)
   A = view(O, 3:3, :);  B = view(O, 4:4, :)
-  kpow = k .^ reshape(buf.kpow_exp, :, 1)
-  C = buf.XE * (reshape(buf.cC, :, 1) .* kpow)
-  S = buf.XO * (reshape(buf.cS, :, 1) .* kpow)
-  return exp.(reshape(buf.xs, :, 1) .* mu) .* (A .* C .+ B .* S)
+  x = reshape(buf.xs, :, 1)
+  z = k .* x .* x
+  C = _c_series_value.(z)
+  S = x .* _s_series_value.(z)
+  return exp.(x .* mu) .* (A .* C .+ B .* S)
 end
 
 """
@@ -741,21 +753,21 @@ function batched_eigenvalue_losses(O::AbstractMatrix, buf::BatchEigBuffers)
   # required only with respect to O (and therefore the network parameters).
   # Without this barrier Zygote constructs adjoints for the CuArray constants;
   # some of those adjoints fall back to scalar-indexed generic matvec code.
-  tau, delta, xs, xe, xo, cc, cs, exponents, a0, a1, utrue = Zygote.ignore() do
-    (buf.TAU, buf.DELTA, buf.xs, buf.XE, buf.XO, buf.cC, buf.cS,
-     buf.kpow_exp, buf.A0, buf.A1, buf.UTRUE)
+  tau, delta, xs, a0, a1, utrue = Zygote.ignore() do
+    (buf.TAU, buf.DELTA, buf.xs, buf.A0, buf.A1, buf.UTRUE)
   end
 
-  kpow = k .^ reshape(exponents, :, 1) # (PTERM+1 × nb): kpow[n,b] = k[b]^n
-  C = xe * (reshape(cc, :, 1) .* kpow) # (P × nb)
-  S = xo * (reshape(cs, :, 1) .* kpow)
+  x = reshape(xs, :, 1)
+  z = k .* x .* x
+  C = _c_series_value.(z)
+  S = x .* _s_series_value.(z)
 
   v = A .* C .+ B .* S
   vp = A .* (k .* S) .+ B .* C          # v' = A·k·S + B·C
   # Express this outer product as broadcasting. The matrix-multiplication
   # pullback can otherwise dispatch to a scalar-indexed generic matvec for
   # CuArray views, which is unsupported on the GPU.
-  E = exp.(reshape(xs, :, 1) .* mu)      # (P × nb)
+  E = exp.(x .* mu)                      # (P × nb)
 
   resid = E .* ((mu .^ 2 .+ k .- tau .* mu .+ delta) .* v .+
                 (2 .* mu .- tau) .* vp)

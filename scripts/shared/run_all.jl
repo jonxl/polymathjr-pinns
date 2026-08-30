@@ -310,7 +310,9 @@ function run_all_gpus(jobs)
   smoke_grad = smoke_gradient[1]
   CUDA.synchronize()
   isfinite(smoke_loss) || error("Eigenvalue GPU gradient preflight produced a non-finite loss")
-  all(isfinite, Array(smoke_grad)) || error("Eigenvalue GPU gradient preflight produced non-finite values")
+  smoke_grad_cpu = Array(smoke_grad)
+  all(isfinite, smoke_grad_cpu) || error(
+    "Eigenvalue GPU gradient preflight produced non-finite values: $(smoke_grad_cpu)")
   smoke_buf = smoke_out = smoke_grad = nothing
   GC.gc(true)
   CUDA.reclaim()
