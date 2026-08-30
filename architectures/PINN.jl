@@ -85,6 +85,10 @@ struct PINNSettings
   #   :power_series — outputs ψ₀…ψ_N,  u(x) = Σ ψₙ xⁿ            (monomial basis)
   #   :eigenvalue   — outputs (μ,k,A,B), u(x) = e^{μx}[A·C(k,x) + B·S(k,x)]
   representation::Symbol
+  # Network input encoding. `:coefficients` preserves the general flattened
+  # ODE input; `:trace_determinant` gives both dual-study models the same
+  # two-value (tau, delta) input while the loss still uses [delta, -tau, 1].
+  input_encoding::Symbol
 end
 
 # Backwards-compatible constructor: existing positional call sites
@@ -96,7 +100,17 @@ function PINNSettings(neuron_num, seed, ode_matrices, maxiters_lbfgs,
   return PINNSettings(neuron_num, seed, ode_matrices, maxiters_lbfgs,
                       n_terms_for_power_series, num_supervised, num_points,
                       x_left, x_right, supervised_weight, pde_weight,
-                      xs, optimizer, :power_series)
+                      xs, optimizer, :power_series, :coefficients)
+end
+
+function PINNSettings(neuron_num, seed, ode_matrices, maxiters_lbfgs,
+                      n_terms_for_power_series, num_supervised, num_points,
+                      x_left, x_right, supervised_weight, pde_weight,
+                      xs, optimizer, representation)
+  return PINNSettings(neuron_num, seed, ode_matrices, maxiters_lbfgs,
+                      n_terms_for_power_series, num_supervised, num_points,
+                      x_left, x_right, supervised_weight, pde_weight,
+                      xs, optimizer, representation, :coefficients)
 end
 
 # ---------------------------------------------------------------------------
@@ -117,6 +131,7 @@ io_dims(settings::PINNSettings) = io_dims(Val(settings.representation), settings
 # Power series: input is the flattened (canonicalized) ODE coefficient matrix,
 # output is one coefficient per power x⁰…x^N.
 function io_dims(::Val{:power_series}, settings::PINNSettings)
+  settings.input_encoding === :trace_determinant && return (2, settings.n_terms_for_power_series + 1)
   in_width = if !isempty(settings.ode_matrices)
     maximum(prod(size(key)) for (key, _) in settings.ode_matrices)
   else

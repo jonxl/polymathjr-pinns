@@ -16,16 +16,18 @@ struct CanonicalODESplit
   name::Symbol
   size::Int
   seed::UInt64
+  shuffle_seed::UInt64
   N::Int
   regions::Vector{Symbol}
 end
 
 function CanonicalODESplit(name::Symbol, size::Int, seed::Integer, N::Int;
+                           shuffle_seed::Integer=seed,
                            regions=REGIONS)
   size > 0 || error("split size must be positive")
   isempty(regions) && error("at least one region is required")
   all(r -> r in REGIONS, regions) || error("unknown trace-determinant region")
-  CanonicalODESplit(name, size, UInt64(seed), N, Symbol[regions...])
+  CanonicalODESplit(name, size, UInt64(seed), UInt64(shuffle_seed), N, Symbol[regions...])
 end
 
 dataset_id(s::CanonicalODESplit) = bytes2hex(sha256(join((
@@ -91,7 +93,7 @@ function batch_items(s::CanonicalODESplit, epoch::Int, batch::Int, batch_size::I
   # An affine permutation gives a complete, allocation-free shuffle each epoch.
   # D-1 is always coprime to D, so every canonical index appears exactly once.
   multiplier = s.size == 1 ? 1 : s.size - 1
-  offset = Int(mod(splitmix64(xor(s.seed, UInt64(epoch))), UInt64(s.size)))
+  offset = Int(mod(splitmix64(xor(s.shuffle_seed, UInt64(epoch))), UInt64(s.size)))
   first_position = (batch - 1) * batch_size
   count = min(batch_size, s.size - first_position)
   items = Vector{Pair{Any,Any}}(undef, count)
@@ -111,7 +113,7 @@ function family_batch_items(s::CanonicalODESplit, region::Symbol, epoch::Int,
   nbatches = cld(count_total, batch_size)
   1 <= batch <= nbatches || throw(BoundsError(1:nbatches, batch))
   multiplier = count_total == 1 ? 1 : count_total - 1
-  offset = Int(mod(splitmix64(xor(s.seed, UInt64(epoch), UInt64(region_position))), UInt64(count_total)))
+  offset = Int(mod(splitmix64(xor(s.shuffle_seed, UInt64(epoch), UInt64(region_position))), UInt64(count_total)))
   first_position = (batch - 1) * batch_size
   count = min(batch_size, count_total - first_position)
   items = Vector{Pair{Any,Any}}(undef, count)

@@ -77,17 +77,30 @@ function parse_args(args)
   return (; results_root, chart_root, ng, map_limit)
 end
 
-checkpoint_dir(root, rep, region) =
-  joinpath(root, "exp-batch_transfer-$(rep)-train_$(region)")
+function checkpoint_dir(root, rep, region)
+  current = joinpath(root, "family", String(region), String(rep))
+  return isdir(current) ? current : joinpath(root, "exp-batch_transfer-$(rep)-train_$(region)")
+end
+
+function final_checkpoint(dir)
+  legacy = joinpath(dir, "model.checkpoint")
+  isfile(legacy) && return legacy
+  candidates = sort(filter(name -> startswith(name, "model-dense-mlp-p") &&
+                                   endswith(name, ".checkpoint"), readdir(dir)))
+  length(candidates) == 1 || error("Expected exactly one final model checkpoint in $dir, found $(length(candidates))")
+  return joinpath(dir, only(candidates))
+end
 
 function require_inputs(root)
   missing = String[]
   for rep in REPRESENTATIONS, region in REGIONS
     dir = checkpoint_dir(root, rep, region)
-    for name in ("model.checkpoint", "loss.csv")
-      path = joinpath(dir, name)
-      isfile(path) || push!(missing, path)
+    try
+      final_checkpoint(dir)
+    catch
+      push!(missing, joinpath(dir, "model-dense-mlp-pNNNNNN.checkpoint"))
     end
+    isfile(joinpath(dir, "loss.csv")) || push!(missing, joinpath(dir, "loss.csv"))
   end
   for rep in REPRESENTATIONS
     path = joinpath(root, "data", "batch_transfer_$(rep).json")
@@ -271,7 +284,7 @@ function write_contour_charts(results_root, output_dir, ng, limit)
   utrue = analytic_solutions(ts, ds, xs)
   maps = Dict{Tuple{Symbol,Symbol},Matrix{Float32}}()
   for rep in REPRESENTATIONS, region in REGIONS
-    checkpoint = joinpath(checkpoint_dir(results_root, rep, region), "model.checkpoint")
+    checkpoint = final_checkpoint(checkpoint_dir(results_root, rep, region))
     println("Evaluating $rep / $region")
     maps[(rep, region)] = evaluate_error_map(checkpoint, rep, taus, deltas, ts, ds, xs, utrue)
   end

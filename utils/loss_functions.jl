@@ -300,14 +300,18 @@ function precompute_batch_buffers(settings, items, use_gpu::Bool, to_device_fn)
   # coefficients are scale-invariant, exactly as the per-ODE path does.
   alphas = [canonicalize_alpha(vec(k)) for (k, _) in items]
   M_orders = maximum(length, alphas)
-  input_width = if !isempty(settings.ode_matrices)
+  input_width = if settings.input_encoding === :trace_determinant
+    2
+  elseif !isempty(settings.ode_matrices)
     maximum(prod(size(key)) for (key, _) in settings.ode_matrices)
   else
     M_orders
   end
-  M_orders <= input_width || error(
-    "evaluation ODE order exceeds the trained power-series input width: got $M_orders coefficients, network expects $input_width"
-  )
+  if settings.input_encoding !== :trace_determinant
+    M_orders <= input_width || error(
+      "evaluation ODE order exceeds the trained power-series input width: got $M_orders coefficients, network expects $input_width"
+    )
+  end
 
   X_cpu = zeros(Float32, input_width, nb)
   ALPHA_cpu = zeros(Float32, M_orders, nb)
@@ -317,7 +321,12 @@ function precompute_batch_buffers(settings, items, use_gpu::Bool, to_device_fn)
 
   for (b, (_, series)) in enumerate(items)
     a = alphas[b]
-    X_cpu[1:length(a), b] .= a
+    if settings.input_encoding === :trace_determinant
+      length(a) == 3 || error("trace-determinant input requires a second-order constant-coefficient ODE")
+      X_cpu[:, b] .= Float32[-a[2], a[1]]
+    else
+      X_cpu[1:length(a), b] .= a
+    end
     ALPHA_cpu[1:length(a), b] .= a
     BC_cpu[1, b] = Float32(series[1])
     BC_cpu[2, b] = Float32(series[2])

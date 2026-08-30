@@ -5,16 +5,23 @@
 
 using Dates
 using JSON
+using CUDA
 
 include("../../architectures/PINN.jl")
 using .PINN
 include("../../utils/dual_dataset.jl")
 using .DualDataset
+include("../../utils/tui.jl")
+using .TUI
 
 const REGIONS = [:saddle, :stable_node, :unstable_node,
                  :stable_spiral, :unstable_spiral, :center]
 
-const OUTPUT_ROOT = "results/dual-representation-10m"
+const DATASET_SEED = parse(Int, get(ENV, "DUAL_DATASET_SEED", "10001"))
+const SHUFFLE_SEED = parse(Int, get(ENV, "DUAL_SHUFFLE_SEED", "40001"))
+const MODEL_SEED = parse(Int, get(ENV, "DUAL_MODEL_SEED", "1234"))
+const RUN_NAME = "dataset-$(DATASET_SEED)-shuffle-$(SHUFFLE_SEED)-model-$(MODEL_SEED)"
+const OUTPUT_ROOT = joinpath("results/dual-representation-10m", RUN_NAME)
 const TRAIN_SIZE = 10_000_000
 const VALIDATION_SIZE = 500_000
 const TEST_SIZE = 1_000_000
@@ -24,21 +31,25 @@ const CHECKPOINT_EPOCH_INTERVAL = 5
 const N = 20
 const NEURON_COUNT = 64
 const NUM_POINTS = 50
-const TRAIN_SEED = 10_001
-const VALIDATION_SEED = 20_001
-const TEST_SEED = 30_001
-const MODEL_SEED = 1_234
+const TRAIN_SEED = DATASET_SEED
+const VALIDATION_SEED = DATASET_SEED + 10_000
+const TEST_SEED = DATASET_SEED + 20_000
 const RUN_GLOBAL_MODELS = true
 const RUN_FAMILY_MODELS = true
+const GPU_COUNT = 8
 
-const TRAIN_SPLIT = CanonicalODESplit(:train, TRAIN_SIZE, TRAIN_SEED, N; regions=REGIONS)
-const VALIDATION_SPLIT = CanonicalODESplit(:validation, VALIDATION_SIZE, VALIDATION_SEED, N; regions=REGIONS)
-const TEST_SPLIT = CanonicalODESplit(:test, TEST_SIZE, TEST_SEED, N; regions=REGIONS)
+const TRAIN_SPLIT = CanonicalODESplit(:train, TRAIN_SIZE, TRAIN_SEED, N;
+  shuffle_seed=SHUFFLE_SEED, regions=REGIONS)
+const VALIDATION_SPLIT = CanonicalODESplit(:validation, VALIDATION_SIZE, VALIDATION_SEED, N;
+  shuffle_seed=SHUFFLE_SEED + 10_000, regions=REGIONS)
+const TEST_SPLIT = CanonicalODESplit(:test, TEST_SIZE, TEST_SEED, N;
+  shuffle_seed=SHUFFLE_SEED + 20_000, regions=REGIONS)
 
 split_manifest(split) = Dict(
   "name" => String(split.name),
   "size" => split.size,
   "seed" => string(split.seed),
+  "shuffle_seed" => string(split.shuffle_seed),
   "dataset_id" => dataset_id(split),
   "regions" => String.(split.regions),
   "power_series_degree" => split.N,
@@ -64,6 +75,8 @@ function run_config()
       "collocation_points" => NUM_POINTS,
       "power_series_degree" => N,
       "model_seed" => MODEL_SEED,
+      "dataset_seed" => DATASET_SEED,
+      "shuffle_seed" => SHUFFLE_SEED,
       "global_models" => RUN_GLOBAL_MODELS,
       "family_models" => RUN_FAMILY_MODELS,
     ),
@@ -103,6 +116,12 @@ function write_run_manifests()
     println(io, "- Power-series degree: **N=$(N)** ($(N + 1) outputs)")
     println(io, "- Eigenvalue outputs: **4**")
     println(io, "- Models: **2 global + 12 family-specific = 14 total**")
+    println(io, "- Dense MLPs: power series `2→64→64→64→21` (**9,877 parameters**); eigenvalue `2→64→64→64→4` (**8,772 parameters**)")
+    println(io, "- Dataset seed: **$(DATASET_SEED)**")
+    println(io, "- Shuffle seed: **$(SHUFFLE_SEED)**")
+    println(io, "- Model initialization seed: **$(MODEL_SEED)**")
+    println(io, "- Final power-series filename: `model-dense-mlp-p009877.checkpoint`")
+    println(io, "- Final eigenvalue filename: `model-dense-mlp-p008772.checkpoint`")
     println(io, "- Train dataset ID: `$(dataset_id(TRAIN_SPLIT))`")
     println(io, "\nValidation selects checkpoints. The final test split is evaluated only after the training configuration and checkpoint are fixed.")
   end
@@ -118,15 +137,20 @@ function dummy_dataset(split, region=nothing)
   return Dict(item)
 end
 
-function train_model(representation::Symbol, scope::Symbol; region::Union{Symbol,Nothing}=nothing)
+function train_model(representation::Symbol, scope::Symbol;
+                     region::Union{Symbol,Nothing}=nothing,
+                     board::Union{TUI.GPUBoard,Nothing}=nothing,
+                     gpu_slot::Int=1)
   count = region === nothing ? TRAIN_SPLIT.size : family_size(TRAIN_SPLIT, region)
   batches = cld(count, BATCH_SIZE)
   maxiters = batches * EPOCHS
+  parameter_count = representation === :power_series ? 9_877 : 8_772
+  parameter_tag = "p$(lpad(parameter_count, 6, '0'))"
   dataset = dummy_dataset(TRAIN_SPLIT, region)
   settings = PINNSettings(
     NEURON_COUNT, MODEL_SEED, dataset, maxiters, N, N + 1, NUM_POINTS,
     0f0, 1f0, 1f0, 1f0, collect(range(0f0, 1f0, length=NUM_POINTS)),
-    "adam", representation,
+    "adam", representation, :trace_determinant,
   )
 
   scope_name = region === nothing ? "global" : String(region)
@@ -144,6 +168,16 @@ function train_model(representation::Symbol, scope::Symbol; region::Union{Symbol
     "scope" => String(scope),
     "family" => region === nothing ? "all" : String(region),
     "dataset_id" => dataset_id(TRAIN_SPLIT),
+    "dataset_seed" => DATASET_SEED,
+    "shuffle_seed" => SHUFFLE_SEED,
+    "model_seed" => MODEL_SEED,
+    "model_type" => "dense_mlp",
+    "hidden_layers" => [64, 64, 64],
+    "input_encoding" => "trace_determinant",
+    "input_width" => 2,
+    "output_width" => representation === :power_series ? N + 1 : 4,
+    "parameter_count" => parameter_count,
+    "checkpoint_filename_tag" => "dense-mlp-$(parameter_tag)",
     "unique_training_odes" => count,
     "batch_size" => BATCH_SIZE,
     "epoch" => epoch,
@@ -160,7 +194,7 @@ function train_model(representation::Symbol, scope::Symbol; region::Union{Symbol
     epoch = iteration ÷ batches
     epoch == EPOCHS && return
     path = joinpath(output_dir, "snapshots",
-                    "epoch-$(lpad(epoch, 4, '0'))-iter-$(lpad(iteration, 8, '0')).checkpoint")
+                    "epoch-$(lpad(epoch, 4, '0'))-iter-$(lpad(iteration, 8, '0'))-dense-mlp-$(parameter_tag).checkpoint")
     PINN.SafeTensorSnapshots.save_checkpoint(path, p, net, MODEL_SEED;
       representation=representation, iteration=iteration,
       extra_metadata=common_metadata(epoch, iteration))
@@ -171,13 +205,24 @@ function train_model(representation::Symbol, scope::Symbol; region::Union{Symbol
   function save_interrupted(p, iteration, net, _st, _run_id)
     interrupted[] = true
     epoch = iteration ÷ batches
-    path = joinpath(output_dir, "interrupted-epoch-$(lpad(epoch, 4, '0'))-iter-$(lpad(iteration, 8, '0')).checkpoint")
+    path = joinpath(output_dir, "interrupted-epoch-$(lpad(epoch, 4, '0'))-iter-$(lpad(iteration, 8, '0'))-dense-mlp-$(parameter_tag).checkpoint")
     PINN.SafeTensorSnapshots.save_checkpoint(path, p, net, MODEL_SEED;
       representation=representation, iteration=iteration,
       extra_metadata=common_metadata(epoch, iteration))
   end
 
   @info "Starting matched model" representation scope=scope_name count batches epochs=EPOCHS maxiters
+  progress_callback = if board === nothing
+    nothing
+  else
+    TUI.update!(board, gpu_slot; variant="$(scope_name)-$(representation)",
+                iter=0, max_iter=maxiters, loss=Float32(NaN))
+    (state, loss) -> begin
+      TUI.update!(board, gpu_slot; iter=Int(state.iter), max_iter=maxiters,
+                  loss=Float32(loss))
+      false
+    end
+  end
   p, net, st, _, _ = train_pinn(
     settings, output_dir;
     run_id="dual-$(scope_name)-$(representation)",
@@ -188,25 +233,75 @@ function train_model(representation::Symbol, scope::Symbol; region::Union{Symbol
     batch_provider=provider,
     streaming_dataset_size=count,
     write_loss_csv=true,
+    progress_callback=progress_callback,
   )
   if !interrupted[]
     PINN.SafeTensorSnapshots.save_checkpoint(
-      joinpath(output_dir, "model.checkpoint"), p, net, MODEL_SEED;
+      joinpath(output_dir, "model-dense-mlp-$(parameter_tag).checkpoint"), p, net, MODEL_SEED;
       representation=representation, iteration=maxiters,
       extra_metadata=common_metadata(EPOCHS, maxiters),
     )
+    board !== nothing && TUI.update!(board, gpu_slot;
+      variant="$(scope_name)-$(representation) ✓", iter=maxiters, max_iter=maxiters)
   end
 end
 
 write_run_manifests()
 
-for representation in (:power_series, :eigenvalue)
-  RUN_GLOBAL_MODELS && train_model(representation, :global)
-  if RUN_FAMILY_MODELS
-    for region in REGIONS
-      train_model(representation, :family; region=region)
+function build_jobs()
+  jobs = NamedTuple[]
+  for representation in (:power_series, :eigenvalue)
+    RUN_GLOBAL_MODELS && push!(jobs, (representation=representation, scope=:global, region=nothing))
+    if RUN_FAMILY_MODELS
+      for region in REGIONS
+        push!(jobs, (representation=representation, scope=:family, region=region))
+      end
     end
   end
+  return jobs
 end
+
+function run_all_gpus(jobs)
+  CUDA.functional() || error("The 10M run requires CUDA, but CUDA.functional() is false")
+  available = CUDA.ndevices()
+  available >= GPU_COUNT || error("The run requires $(GPU_COUNT) GPUs, but CUDA.jl sees only $(available)")
+  Threads.nthreads() >= GPU_COUNT || error(
+    "The run requires at least $(GPU_COUNT) Julia threads; launch with `julia --project=. -t $(GPU_COUNT) scripts/shared/run_all.jl`"
+  )
+
+  device_labels = ["GPU $(i - 1) ($(CUDA.name(CUDA.device(i - 1))))" for i in 1:GPU_COUNT]
+  board = TUI.GPUBoard(device_labels)
+  queue = Channel{NamedTuple}(length(jobs))
+  foreach(job -> put!(queue, job), jobs)
+  close(queue)
+
+  failures = Channel{Any}(length(jobs))
+  workers = Task[]
+  for slot in 1:GPU_COUNT
+    push!(workers, Threads.@spawn begin
+      CUDA.device!(slot - 1)
+      for job in queue
+        try
+          train_model(job.representation, job.scope;
+                      region=job.region, board=board, gpu_slot=slot)
+        catch err
+          TUI.update!(board, slot;
+            variant="$(job.region === nothing ? "global" : job.region)-$(job.representation) FAILED")
+          put!(failures, (job=job, error=err, backtrace=catch_backtrace()))
+        end
+      end
+    end)
+  end
+  foreach(fetch, workers)
+  close(failures)
+
+  failed = collect(failures)
+  for failure in failed
+    @error "Dual-representation model failed" job=failure.job exception=(failure.error, failure.backtrace)
+  end
+  isempty(failed) || error("$(length(failed)) model job(s) failed; see errors above")
+end
+
+run_all_gpus(build_jobs())
 
 @info "Dual-representation pretraining complete" output_root=OUTPUT_ROOT

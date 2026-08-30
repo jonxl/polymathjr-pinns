@@ -24,7 +24,9 @@ Returns a vector of predicted coefficients.
 function load_and_infer(snapshot_path::String, ode_matrix::Matrix)
   coeff_net, p, st, metadata = SafeTensorSnapshots.load_any_model(snapshot_path)
   representation = Symbol(get(metadata, "representation", "power_series"))
-  input = if representation === :eigenvalue
+  input_encoding = Symbol(get(metadata, "input_encoding",
+                              representation === :eigenvalue ? "trace_determinant" : "coefficients"))
+  input = if input_encoding === :trace_determinant
     tau, delta = tau_delta_from_alpha(vec(ode_matrix))
     Float32[tau, delta]
   else
@@ -79,7 +81,7 @@ function replay_snapshots(run_dir::String, ode_matrix::Matrix)
 
   results = NamedTuple[]
   for fname in snapshot_files
-    m = match(r"iter-(\d+)\.(checkpoint|safetensors)", fname)
+    m = match(r"iter-(\d+).*\.(checkpoint|safetensors)$", fname)
     m === nothing && continue
     iteration = parse(Int, m.captures[1])
 
