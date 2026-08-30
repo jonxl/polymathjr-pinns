@@ -731,22 +731,31 @@ function batched_eigenvalue_losses(O::AbstractMatrix, buf::BatchEigBuffers)
   mu = view(O, 1:1, :); k = view(O, 2:2, :)
   A = view(O, 3:3, :);  B = view(O, 4:4, :)
 
-  kpow = k .^ reshape(buf.kpow_exp, :, 1) # (PTERM+1 × nb): kpow[n,b] = k[b]^n
-  C = buf.XE * (reshape(buf.cC, :, 1) .* kpow) # (P × nb)
-  S = buf.XO * (reshape(buf.cS, :, 1) .* kpow)
+  # These arrays define the fixed ODE batch and analytic basis. Gradients are
+  # required only with respect to O (and therefore the network parameters).
+  # Without this barrier Zygote constructs adjoints for the CuArray constants;
+  # some of those adjoints fall back to scalar-indexed generic matvec code.
+  tau, delta, xs, xe, xo, cc, cs, exponents, a0, a1, utrue = Zygote.ignore() do
+    (buf.TAU, buf.DELTA, buf.xs, buf.XE, buf.XO, buf.cC, buf.cS,
+     buf.kpow_exp, buf.A0, buf.A1, buf.UTRUE)
+  end
+
+  kpow = k .^ reshape(exponents, :, 1) # (PTERM+1 × nb): kpow[n,b] = k[b]^n
+  C = xe * (reshape(cc, :, 1) .* kpow) # (P × nb)
+  S = xo * (reshape(cs, :, 1) .* kpow)
 
   v = A .* C .+ B .* S
   vp = A .* (k .* S) .+ B .* C          # v' = A·k·S + B·C
-  E = exp.(buf.xs * mu)                 # (P × nb)
+  E = exp.(xs * mu)                     # (P × nb)
 
-  resid = E .* ((mu .^ 2 .+ k .- buf.TAU .* mu .+ buf.DELTA) .* v .+
-                (2 .* mu .- buf.TAU) .* vp)
+  resid = E .* ((mu .^ 2 .+ k .- tau .* mu .+ delta) .* v .+
+                (2 .* mu .- tau) .* vp)
   loss_pde = sum(abs2, resid) / (buf.num_points * buf.nb)
 
   # u(0) = A, u'(0) = μA + B — L2, matching the power-series BC term.
-  loss_bc = (sum(abs2, A .- buf.A0) + sum(abs2, mu .* A .+ B .- buf.A1)) / buf.nb
+  loss_bc = (sum(abs2, A .- a0) + sum(abs2, mu .* A .+ B .- a1)) / buf.nb
 
-  loss_sup = sum(abs2, (E .* v) .- buf.UTRUE) / (buf.num_points * buf.nb)
+  loss_sup = sum(abs2, (E .* v) .- utrue) / (buf.num_points * buf.nb)
 
   return (loss_pde, loss_bc, loss_sup)
 end

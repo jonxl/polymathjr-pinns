@@ -6,6 +6,7 @@
 using Dates
 using JSON
 using CUDA
+using Zygote
 
 include("../../architectures/PINN.jl")
 using .PINN
@@ -284,6 +285,28 @@ function run_all_gpus(jobs)
   )
 
   selected_devices = devices[1:GPU_COUNT]
+  # Fail fast before starting any long-running model. This exercises the
+  # eigenvalue loss's GPU forward and reverse passes, where unsupported generic
+  # adjoints would otherwise fail only after the multi-GPU queue has started.
+  CUDA.device!(selected_devices[1])
+  smoke_items = batch_items(TRAIN_SPLIT, 1, 1, 4)
+  smoke_settings = PINNSettings(
+    4, MODEL_SEED, Dict(smoke_items[1]), 1, N, N + 1, 3,
+    0f0, 1f0, 1f0, 1f0, Float32[0f0, 0.5f0, 1f0],
+    "adam", :eigenvalue, :trace_determinant,
+  )
+  smoke_buf = PINN.loss_functions.precompute_batch_eig_buffers(
+    smoke_settings, smoke_items, true, CUDA.cu)
+  smoke_out = CUDA.rand(Float32, 4, length(smoke_items))
+  smoke_objective(o) = sum(PINN.loss_functions.batched_eigenvalue_losses(o, smoke_buf))
+  smoke_grad = Zygote.gradient(smoke_objective, smoke_out)[1]
+  CUDA.synchronize()
+  all(isfinite, Array(smoke_grad)) || error("Eigenvalue GPU gradient preflight produced non-finite values")
+  smoke_buf = smoke_out = smoke_grad = nothing
+  GC.gc(true)
+  CUDA.reclaim()
+  @info "Eigenvalue GPU gradient preflight passed"
+
   device_labels = ["GPU $(i - 1) ($(CUDA.name(selected_devices[i])))" for i in 1:GPU_COUNT]
   board = TUI.GPUBoard(device_labels)
   queue = Channel{NamedTuple}(length(jobs))
