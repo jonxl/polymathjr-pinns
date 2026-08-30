@@ -158,6 +158,15 @@ function train_model(representation::Symbol, scope::Symbol;
     joinpath(OUTPUT_ROOT, "global", String(representation)) :
     joinpath(OUTPUT_ROOT, "family", String(region), String(representation))
   mkpath(output_dir)
+  final_model_path = joinpath(output_dir, "model-dense-mlp-$(parameter_tag).checkpoint")
+  if isfile(final_model_path)
+    @info "Skipping completed model" representation scope=scope_name path=final_model_path
+    if board !== nothing
+      TUI.update!(board, gpu_slot; variant="$(scope_name)-$(representation) already complete ✓",
+                  iter=maxiters, max_iter=maxiters)
+    end
+    return final_model_path
+  end
 
   provider = region === nothing ?
     ((epoch, batch) -> batch_items(TRAIN_SPLIT, epoch, batch, BATCH_SIZE)) :
@@ -237,7 +246,7 @@ function train_model(representation::Symbol, scope::Symbol;
   )
   if !interrupted[]
     PINN.SafeTensorSnapshots.save_checkpoint(
-      joinpath(output_dir, "model-dense-mlp-$(parameter_tag).checkpoint"), p, net, MODEL_SEED;
+      final_model_path, p, net, MODEL_SEED;
       representation=representation, iteration=maxiters,
       extra_metadata=common_metadata(EPOCHS, maxiters),
     )
@@ -293,7 +302,9 @@ function run_all_gpus(jobs)
         catch err
           TUI.update!(board, slot;
             variant="$(job.region === nothing ? "global" : job.region)-$(job.representation) FAILED")
-          put!(failures, (job=job, error=err, backtrace=catch_backtrace()))
+          bt = catch_backtrace()
+          @error "Dual-representation model failed" gpu=slot job exception=(err, bt)
+          put!(failures, (job=job, error=err, backtrace=bt))
         finally
           # All persisted checkpoints contain CPU weights. Finish outstanding
           # kernels, collect model/batch objects, then return cached device
@@ -316,9 +327,6 @@ function run_all_gpus(jobs)
   close(failures)
 
   failed = collect(failures)
-  for failure in failed
-    @error "Dual-representation model failed" job=failure.job exception=(failure.error, failure.backtrace)
-  end
   isempty(failed) || error("$(length(failed)) model job(s) failed; see errors above")
 end
 

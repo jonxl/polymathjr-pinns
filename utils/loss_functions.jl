@@ -678,9 +678,9 @@ batched_reconstruct(A::AbstractMatrix, buf::BatchBuffers) = buf.D[1] * A
 function batched_reconstruct(O::AbstractMatrix, buf::BatchEigBuffers)
   mu = view(O, 1:1, :); k = view(O, 2:2, :)
   A = view(O, 3:3, :);  B = view(O, 4:4, :)
-  kpow = k .^ buf.kpow_exp
-  C = buf.XE * (buf.cC .* kpow)
-  S = buf.XO * (buf.cS .* kpow)
+  kpow = k .^ reshape(buf.kpow_exp, :, 1)
+  C = buf.XE * (reshape(buf.cC, :, 1) .* kpow)
+  S = buf.XO * (reshape(buf.cS, :, 1) .* kpow)
   return exp.(buf.xs * mu) .* (A .* C .+ B .* S)
 end
 
@@ -731,9 +731,9 @@ function batched_eigenvalue_losses(O::AbstractMatrix, buf::BatchEigBuffers)
   mu = view(O, 1:1, :); k = view(O, 2:2, :)
   A = view(O, 3:3, :);  B = view(O, 4:4, :)
 
-  kpow = k .^ buf.kpow_exp              # (PTERM+1 × nb): kpow[n,b] = k[b]^n
-  C = buf.XE * (buf.cC .* kpow)         # (P × nb)
-  S = buf.XO * (buf.cS .* kpow)
+  kpow = k .^ reshape(buf.kpow_exp, :, 1) # (PTERM+1 × nb): kpow[n,b] = k[b]^n
+  C = buf.XE * (reshape(buf.cC, :, 1) .* kpow) # (P × nb)
+  S = buf.XO * (reshape(buf.cS, :, 1) .* kpow)
 
   v = A .* C .+ B .* S
   vp = A .* (k .* S) .+ B .* C          # v' = A·k·S + B·C
