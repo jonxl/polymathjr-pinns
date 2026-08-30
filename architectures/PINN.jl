@@ -398,7 +398,7 @@ end
 We train the PINN on the training dataset and return the network
 =#
 
-function train_pinn(settings::PINNSettings, output_dir; run_id::String=generate_run_id(settings.optimizer), milestone_interval::Int=0, on_milestone::Union{Function,Nothing}=nothing, on_interrupt::Union{Function,Nothing}=nothing, progress_callback::Union{Function,Nothing}=nothing, write_loss_csv::Bool=true, snapshot_path::Union{String,Nothing}=nothing, batch_size::Int=0, snapshot_epoch_interval::Int=10)
+function train_pinn(settings::PINNSettings, output_dir; run_id::String=generate_run_id(settings.optimizer), milestone_interval::Int=0, on_milestone::Union{Function,Nothing}=nothing, on_interrupt::Union{Function,Nothing}=nothing, progress_callback::Union{Function,Nothing}=nothing, write_loss_csv::Bool=true, snapshot_path::Union{String,Nothing}=nothing, batch_size::Int=0, snapshot_epoch_interval::Int=10, batch_provider::Union{Function,Nothing}=nothing, streaming_dataset_size::Int=0)
   csv_file = joinpath(output_dir, "loss.csv")
 
   use_gpu = GPUUtils.is_gpu_available()
@@ -426,22 +426,33 @@ function train_pinn(settings::PINNSettings, output_dir; run_id::String=generate_
   # slice per iteration with select_bin. The shared basis/derivative matrices
   # are bin-independent, so this is the only construction that ever happens.
   all_items = collect(settings.ode_matrices)
-  full_buffers = settings.representation === :eigenvalue ?
-    precompute_batch_eig_buffers(settings, all_items, use_gpu, to_device_fn) :
+  streaming = batch_provider !== nothing
+  streaming && streaming_dataset_size <= 0 && error("streaming_dataset_size must be positive when batch_provider is supplied")
+  full_buffers = if streaming
+    nothing
+  elseif settings.representation === :eigenvalue
+    precompute_batch_eig_buffers(settings, all_items, use_gpu, to_device_fn)
+  else
     precompute_batch_buffers(settings, all_items, use_gpu, to_device_fn)
+  end
 
   # Maps an ODE's matrix key to its column, so a bin of items becomes indices.
   key_to_col = Dict(k => i for (i, (k, _)) in enumerate(all_items))
 
-  @info "Pre-computed batched $(settings.representation) buffers for $(length(all_items)) training examples (device: $(use_gpu ? "GPU" : "CPU"))"
+  if streaming
+    @info "Streaming $(settings.representation) batches from $(streaming_dataset_size) canonical training examples (device: $(use_gpu ? "GPU" : "CPU"))"
+  else
+    @info "Pre-computed batched $(settings.representation) buffers for $(length(all_items)) training examples (device: $(use_gpu ? "GPU" : "CPU"))"
+  end
 
   # Create batch iterator for mini-batching (batch_size=0 means full batch)
   batch_iter = EpochBatchIterator(settings.ode_matrices, batch_size)
+  n_odes = streaming ? streaming_dataset_size : length(settings.ode_matrices)
+  batches_per_epoch = batch_size > 0 && batch_size < n_odes ? cld(n_odes, batch_size) : 1
+  total_epochs = cld(settings.maxiters_lbfgs, batches_per_epoch)
   if batch_size > 0
-    n_odes = length(settings.ode_matrices)
-    n_bins = cld(n_odes, batch_size)
     checkpoint_msg = snapshot_epoch_interval > 0 ? "checkpoints every $(snapshot_epoch_interval) epochs" : "intermediate checkpoints disabled"
-    @info "Mini-batching enabled: $(n_odes) ODEs → $(n_bins) bins of ≤$(batch_size), $(checkpoint_msg)"
+    @info "Mini-batching enabled: $(n_odes) ODEs → $(batches_per_epoch) bins of ≤$(batch_size), $(checkpoint_msg)"
   end
 
   # How often to record metrics and update the progress bar (every N iterations)
@@ -456,17 +467,28 @@ function train_pinn(settings::PINNSettings, output_dir; run_id::String=generate_
   latest_metrics = Ref((0.0f0, 0.0f0, 0.0f0))
   latest_params = Ref{Any}(p_init_ca)  # track latest params for graceful interrupt
   iter_count = Ref(0)
+  loss_call_count = Ref(0)
 
   # Create wrapper function for optimization — captures pre-computed buffers and batch iterator
   function loss_wrapper(p_net, _)
     # Bin selection and column slicing are constant w.r.t. p_net — keep both
     # off the AD tape. Slicing is cheap; the buffers themselves are never rebuilt.
     bin = Zygote.ignore() do
-      items = next_batch!(batch_iter)
-      if length(items) == length(all_items)
-        full_buffers          # full batch — no slice needed
+      if streaming
+        loss_call_count[] += 1
+        epoch = cld(loss_call_count[], batches_per_epoch)
+        batch = mod1(loss_call_count[], batches_per_epoch)
+        items = batch_provider(epoch, batch)
+        settings.representation === :eigenvalue ?
+          precompute_batch_eig_buffers(settings, items, use_gpu, to_device_fn) :
+          precompute_batch_buffers(settings, items, use_gpu, to_device_fn)
       else
-        select_bin(full_buffers, [key_to_col[k] for (k, _) in items])
+        items = next_batch!(batch_iter)
+        if length(items) == length(all_items)
+          full_buffers          # full batch — no slice needed
+        else
+          select_bin(full_buffers, [key_to_col[k] for (k, _) in items])
+        end
       end
     end
     loss, losses = global_loss_batched(p_net, settings, coeff_net, st, bin)
@@ -494,17 +516,13 @@ function train_pinn(settings::PINNSettings, output_dir; run_id::String=generate_
 
     # Checkpoints are saved only at configured epoch boundaries. The final model
     # is saved separately by the training scheme after optimization completes.
-    epoch_done = Zygote.ignore() do
+    epoch_done = streaming ? iteration % batches_per_epoch == 0 : Zygote.ignore() do
       batch_iter.epoch_just_completed
     end
-    if epoch_done
-      Zygote.ignore() do
-        @info "Epoch $(batch_iter.epoch_count) complete ($(length(batch_iter.all_items)) ODEs processed, iteration $iteration)"
-      end
-    end
+    completed_epoch = streaming ? iteration ÷ batches_per_epoch : batch_iter.epoch_count
     if on_milestone !== nothing && epoch_done &&
        snapshot_epoch_interval > 0 &&
-       batch_iter.epoch_count % snapshot_epoch_interval == 0
+       completed_epoch % snapshot_epoch_interval == 0
       p_current = use_gpu ? ComponentArray(Array(getdata(state.u)), getaxes(state.u)) : state.u
       on_milestone(p_current, iteration, coeff_net, st, run_id)
     end
@@ -524,7 +542,14 @@ function train_pinn(settings::PINNSettings, output_dir; run_id::String=generate_
     # Default: create own progress bar (single run / scaling adam)
     @info "Starting Adam optimization..."
     p_bar = ProgressBar.ProgressBarSettings(settings.maxiters_lbfgs, "Adam...")
-    callback_bar = ProgressBar.Bar(p_bar; step_size=LOG_INTERVAL)
+    callback_bar = ProgressBar.Bar(
+      p_bar;
+      step_size=LOG_INTERVAL,
+      showvalues_fn=() -> [
+        ("Iteration", "$(iter_count[]) / $(settings.maxiters_lbfgs)"),
+        ("Epoch", "$(cld(iter_count[], batches_per_epoch)) / $(total_epochs)"),
+      ],
+    )
   end
 
   adam_opt = OptimizationOptimisers.Adam(0.001f0)
