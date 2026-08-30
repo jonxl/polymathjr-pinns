@@ -297,10 +297,19 @@ function run_all_gpus(jobs)
   )
   smoke_buf = PINN.loss_functions.precompute_batch_eig_buffers(
     smoke_settings, smoke_items, true, CUDA.cu)
-  smoke_out = CUDA.rand(Float32, 4, length(smoke_items))
+  # Include negative k explicitly: spirals and centers require k < 0. A
+  # positive-only random smoke test cannot expose NaNs in the power pullback.
+  smoke_out = CUDA.cu(Float32[
+    -1.0 -0.5  0.5  1.0
+    -2.0 -0.5  0.5  3.0
+     1.0  1.0  1.0  1.0
+     1.0 -1.0  0.5 -0.5
+  ])
   smoke_objective(o) = sum(PINN.loss_functions.batched_eigenvalue_losses(o, smoke_buf))
-  smoke_grad = Zygote.gradient(smoke_objective, smoke_out)[1]
+  smoke_loss, smoke_gradient = Zygote.withgradient(smoke_objective, smoke_out)
+  smoke_grad = smoke_gradient[1]
   CUDA.synchronize()
+  isfinite(smoke_loss) || error("Eigenvalue GPU gradient preflight produced a non-finite loss")
   all(isfinite, Array(smoke_grad)) || error("Eigenvalue GPU gradient preflight produced non-finite values")
   smoke_buf = smoke_out = smoke_grad = nothing
   GC.gc(true)
