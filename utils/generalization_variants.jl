@@ -26,8 +26,11 @@ module GeneralizationVariants
 include("../utils/tui.jl")
 using .TUI
 
-include("../utils/experiments.jl")
+include("geometry_experiments.jl")
+using .GeometryExperiments
+const Experiments = GeometryExperiments.Experiments
 using .Experiments
+const GEOMETRY_EXPERIMENTS = GeometryExperiments.GeneralizationGeometry.EXPERIMENTS
 
 include("../utils/plugboard.jl")
 using .Plugboard
@@ -80,9 +83,9 @@ function GeneralizationSpec(name::Symbol, representation::Symbol;
                             regions::Vector{Symbol}=REGIONS,
                             Rmax::Int=6, Ng::Int=81,
                             n_per_region::Int=200, maxiters::Int=3000)
-  name in (:transfer, :extrapolate, :range, :showcase, :gen_radius) || error(
+  name in (:transfer, :extrapolate, :range, :showcase, :gen_radius, GEOMETRY_EXPERIMENTS...) || error(
     "GeneralizationSpec: unknown experiment :$name; expected one of " *
-    ":transfer, :extrapolate, :range, :showcase, :gen_radius")
+    ":transfer, :extrapolate, :range, :showcase, :gen_radius, $(GEOMETRY_EXPERIMENTS)")
   representation in (:power_series, :eigenvalue) || error(
     "GeneralizationSpec: representation must be :power_series or :eigenvalue, got :$representation")
   return GeneralizationSpec(name, representation, copy(regions), Rmax, Ng,
@@ -192,25 +195,29 @@ function run_generalization_variants(jobs::AbstractVector{GenJob})
   devs = String[]
   if CUDA.functional()
     n = CUDA.ndevices()
-    devs = [string("GPU ", i, " (", CUDA.name(CUDA.device(i - 1)), ")") for i in 0:(n - 1)]
+    devs = [string("GPU ", i, " (", CUDA.name(CUDA.CuDevice(i)), ")") for i in 0:(n - 1)]
   else
     push!(devs, "CPU")
   end
 
   board = TUI.GPUBoard(devs)
 
+  device_locks = [ReentrantLock() for _ in devs]
   tasks = Task[]
   for job in jobs
     push!(tasks, Threads.@spawn begin
-      try
-        if CUDA.functional()
-          CUDA.device!(job.device_id - 1)
+      lock(device_locks[job.device_id]) do
+        try
+          if CUDA.functional()
+            CUDA.device!(job.device_id - 1)
+          end
+          _run_one_gen_job!(board, job)
+        catch e
+          @error "Generalization $(job.spec.name)/$(job.spec.representation) failed on device $(job.device_id)" exception=(e, catch_backtrace())
+          TUI.update!(board, job.device_id;
+                      variant=string(job.spec.name, "_", job.spec.representation, " FAILED"))
+          rethrow()
         end
-        _run_one_gen_job!(board, job)
-      catch e
-        @error "Generalization $(job.spec.name)/$(job.spec.representation) failed on device $(job.device_id)" exception=(e, catch_backtrace())
-        TUI.update!(board, job.device_id;
-                    variant=string(job.spec.name, "_", job.spec.representation, " FAILED"))
       end
     end)
   end
@@ -228,6 +235,18 @@ function _run_one_gen_job!(board::TUI.GPUBoard, job::GenJob)
   )
   tag = string(job.spec.name, "_", job.spec.representation)
   TUI.update!(board, job.device_id; variant=tag)
+
+  if job.spec.name in GEOMETRY_EXPERIMENTS
+    geometry_cfg = GeometryExperiments.Experiments.ExperimentConfig(;
+      representation=job.spec.representation, n_per_region=job.spec.n_per_region,
+      maxiters=job.spec.maxiters)
+    result = run_geometry(geometry_cfg, job.spec.name;
+      output_root=job.output_dir, ng=job.spec.Ng)
+    cp(joinpath(job.output_dir, String(job.spec.name), String(job.spec.representation), "panelset.json"),
+       joinpath(job.output_dir, "panelset.json"); force=true)
+    TUI.update!(board, job.device_id; variant=string(tag, " ✓"))
+    return result
+  end
 
   ps = if job.spec.name === :transfer
     Experiments.run_transfer(cfg, job.spec.regions, job.spec.regions, tag;

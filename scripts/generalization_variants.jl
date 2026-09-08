@@ -22,6 +22,7 @@
 # =============================================================================
 
 using ArgParse
+using CUDA
 using Dates
 using JSON
 
@@ -37,7 +38,7 @@ function parse_commandline()
       arg_type = String
       default = "power_series,eigenvalue"
     "--experiments"
-      help = "Comma-separated subset of: transfer, extrapolate, range, showcase, gen_radius"
+      help = "Comma-separated experiments: transfer, extrapolate, range, showcase, gen_radius, family_disks, spiral_transfer, pair_transfer, parabola_segment, parabola_slide, parabola_curves, parabola_bias, axis_transfer, axis_sweep"
       arg_type = String
       default = "transfer,extrapolate,range,showcase,gen_radius"
     "--Rmax"
@@ -82,7 +83,7 @@ end
 
 function parse_experiments(s::AbstractString)
   exps = Symbol[]
-  valid = (:transfer, :extrapolate, :range, :showcase, :gen_radius)
+  valid = (:transfer, :extrapolate, :range, :showcase, :gen_radius, GeneralizationVariants.GEOMETRY_EXPERIMENTS...)
   for tok in split(s, ",")
     t = strip(tok)
     isempty(t) && continue

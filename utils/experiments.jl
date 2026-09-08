@@ -110,7 +110,8 @@ end
 # models in a sweep or transfer experiment independently initialized.
 function settings_for(cfg::ExperimentConfig, dataset::Dict;
                       seed_offset::Int=0, neuron_count::Union{Int,Nothing}=nothing,
-                      N::Union{Int,Nothing}=nothing)
+                      N::Union{Int,Nothing}=nothing,
+                      input_encoding::Symbol=:coefficients)
   Nv = something(N, cfg.N)
   xs = collect(range(cfg.x_left, cfg.x_right, length=cfg.num_points))
   return PINNSettings(
@@ -121,7 +122,7 @@ function settings_for(cfg::ExperimentConfig, dataset::Dict;
     Nv, Nv + 1, cfg.num_points,
     cfg.x_left, cfg.x_right,
     cfg.supervised_weight, cfg.pde_weight,
-    xs, "adam", cfg.representation,
+    xs, "adam", cfg.representation, input_encoding,
   )
 end
 
@@ -157,9 +158,10 @@ end
 # History is captured per iteration so Shape A can chart convergence.
 function train_one(cfg::ExperimentConfig, dataset::Dict, tag::String;
                    seed_offset::Int=0, neuron_count=nothing, N=nothing,
+                   input_encoding::Symbol=:coefficients,
                    output_root::String="results")
   settings = settings_for(cfg, dataset; seed_offset=seed_offset,
-                          neuron_count=neuron_count, N=N)
+                          neuron_count=neuron_count, N=N, input_encoding=input_encoding)
   dir = joinpath(output_root, "exp-$tag")
   mkpath(dir)
   function save_intermediate(p_current, iteration, coeff_net, _st, _run_id)
@@ -172,6 +174,7 @@ function train_one(cfg::ExperimentConfig, dataset::Dict, tag::String;
         "objective_components" => "pde + supervised",
         "diagnostic_components" => "bc",
         "experiment_tag" => tag,
+        "input_encoding" => String(settings.input_encoding),
       ))
     @info "Saved intermediate checkpoint" path iteration
   end
@@ -179,7 +182,7 @@ function train_one(cfg::ExperimentConfig, dataset::Dict, tag::String;
     path = joinpath(dir, "interrupted-iter-$(lpad(iteration, 7, '0')).checkpoint")
     PINN.SafeTensorSnapshots.save_checkpoint(path, p_current, coeff_net, settings.seed;
       representation=cfg.representation, iteration=iteration,
-      extra_metadata=Dict{String,Any}("experiment_tag" => tag))
+      extra_metadata=Dict{String,Any}("experiment_tag" => tag, "input_encoding" => String(settings.input_encoding)))
     @warn "Saved interrupted checkpoint" path iteration
   end
   checkpoint_callback = cfg.checkpoint_interval > 0 ? save_intermediate : nothing
@@ -192,7 +195,8 @@ function train_one(cfg::ExperimentConfig, dataset::Dict, tag::String;
     representation=cfg.representation,
     extra_metadata=Dict{String,Any}(
       "objective_components" => "pde + supervised",
-      "diagnostic_components" => "bc"
+      "diagnostic_components" => "bc",
+      "input_encoding" => String(settings.input_encoding),
     ))
   return (p=p, net=net, st=st, settings=settings, dir=dir)
 end
