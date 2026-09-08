@@ -1,7 +1,7 @@
 #!/usr/bin/env julia
 
-# Static, checkpoint-only report for the family-trained power-series and
-# eigenvalue models. This script never calls train_pinn.
+# Static, data-only report for the portable dual-representation study bundle.
+# This script never trains or runs model inference.
 
 ENV["GKSwstype"] = get(ENV, "GKSwstype", "100")
 
@@ -10,10 +10,6 @@ using DataFrames
 using JSON
 using Plots
 
-include("../../architectures/PINN.jl")
-using .PINN
-
-const LF = PINN.loss_functions
 const REGIONS = [:saddle, :stable_node, :unstable_node,
                  :stable_spiral, :unstable_spiral, :center]
 const REPRESENTATIONS = [:power_series, :eigenvalue]
@@ -31,14 +27,14 @@ const REGION_TITLES = Dict(
 
 function usage()
   println("""
-  Generate static charts from existing dual-representation checkpoints.
+  Generate static charts from a completed portable study bundle.
 
   Usage:
     julia --project=. scripts/charts/dual_representation_study.jl [RESULTS_ROOT] [CHART_ROOT] [--ng N] [--map-limit L]
 
   Defaults:
-    RESULTS_ROOT  results/powerseriesvseigenvalue
-    CHART_ROOT    charts/dual-representation-study
+    RESULTS_ROOT  required
+    CHART_ROOT    RESULTS_ROOT/charts
     --ng          81
     --map-limit   4.0
   """)
@@ -72,8 +68,9 @@ function parse_args(args)
   length(positional) <= 2 || error("Expected at most RESULTS_ROOT and CHART_ROOT")
   ng >= 3 || error("--ng must be at least 3")
   map_limit > 0 || error("--map-limit must be positive")
-  results_root = length(positional) >= 1 ? positional[1] : "results/powerseriesvseigenvalue"
-  chart_root = length(positional) >= 2 ? positional[2] : "charts/dual-representation-study"
+  length(positional) >= 1 || error("RESULTS_ROOT is required")
+  results_root = positional[1]
+  chart_root = length(positional) >= 2 ? positional[2] : joinpath(results_root, "charts")
   return (; results_root, chart_root, ng, map_limit)
 end
 
@@ -91,10 +88,32 @@ function final_checkpoint(dir)
   return joinpath(dir, only(candidates))
 end
 
+function selected_checkpoint(root, rep, region)
+  path = joinpath(root, "selection", "selected-checkpoints.json")
+  isfile(path) || error("Missing validation selection: $path")
+  selection = JSON.parsefile(path)
+  key = "family/$(region)/$(rep)"
+  haskey(selection["models"], key) || error("Selection does not contain $key")
+  checkpoint = joinpath(root, selection["models"][key]["checkpoint"])
+  isfile(checkpoint) || error("Missing selected checkpoint: $checkpoint")
+  return checkpoint
+end
+
 function require_inputs(root)
   missing = String[]
+  selection_path = joinpath(root, "selection", "selected-checkpoints.json")
+  isfile(selection_path) || push!(missing, selection_path)
   for rep in REPRESENTATIONS, region in REGIONS
     dir = checkpoint_dir(root, rep, region)
+    try
+      final_checkpoint(dir)
+    catch
+      push!(missing, joinpath(dir, "model-dense-mlp-pNNNNNN.checkpoint"))
+    end
+    isfile(joinpath(dir, "loss.csv")) || push!(missing, joinpath(dir, "loss.csv"))
+  end
+  for rep in REPRESENTATIONS
+    dir = joinpath(root, "global", String(rep))
     try
       final_checkpoint(dir)
     catch
@@ -106,6 +125,10 @@ function require_inputs(root)
     path = joinpath(root, "data", "batch_transfer_$(rep).json")
     isfile(path) || push!(missing, path)
   end
+  final_test = joinpath(root, "data", "final-test-metrics.json")
+  isfile(final_test) || push!(missing, final_test)
+  suite = joinpath(root, "data", "generalization-suite.json")
+  isfile(suite) || push!(missing, suite)
   isempty(missing) || error("Missing study inputs:\n  " * join(missing, "\n  "))
 end
 
@@ -153,6 +176,13 @@ function write_loss_charts(results_root, output_dir)
   fig = plot(panels...; layout=(2, 3), size=(1500, 900),
              plot_title="Optimized total loss — representation comparison")
   save_png(fig, joinpath(output_dir, "side-by-side-total-loss.png"))
+
+  global_panels = [loss_panel(joinpath(results_root, "global", String(rep), "loss.csv"),
+                              "Global — $(replace(String(rep), "_" => " "))")
+                   for rep in REPRESENTATIONS]
+  save_png(plot(global_panels...; layout=(1, 2), size=(1400, 600),
+                plot_title="Global-model training losses"),
+           joinpath(output_dir, "global-side-by-side-loss.png"))
 end
 
 function transfer_matrices(path)
@@ -201,58 +231,6 @@ function write_transfer_charts(results_root, output_dir)
   save_png(fig, joinpath(output_dir, "side-by-side-transfer.png"))
 end
 
-function ordered_plane(limit, ng)
-  taus = collect(range(-limit, limit, length=ng))
-  deltas = collect(range(-limit, limit, length=ng))
-  ts = repeat(Float32.(taus), outer=ng)
-  ds = repeat(Float32.(deltas), inner=ng)
-  return Float32.(taus), Float32.(deltas), ts, ds
-end
-
-function model_inputs(rep, ts, ds)
-  if rep === :eigenvalue
-    return permutedims(hcat(ts, ds))
-  end
-  X = zeros(Float32, 3, length(ts))
-  for i in eachindex(ts)
-    X[:, i] .= LF.canonicalize_alpha(Float32[ds[i], -ts[i], 1.0f0])
-  end
-  return X
-end
-
-function analytic_solutions(ts, ds, xs)
-  U = zeros(Float32, length(xs), length(ts))
-  for i in eachindex(ts)
-    U[:, i] .= LF.eig_true_solution(ts[i], ds[i], 1.0f0, 0.0f0, xs)
-  end
-  return U
-end
-
-function evaluate_error_map(checkpoint, expected_rep, taus, deltas, ts, ds, xs, utrue)
-  net, params, state, metadata = PINN.SafeTensorSnapshots.load_any_model(checkpoint)
-  actual_rep = Symbol(metadata["representation"])
-  actual_rep === expected_rep || error("$checkpoint is $actual_rep, expected $expected_rep")
-  out = Array(first(net(model_inputs(expected_rep, ts, ds), params, state)))
-  upred = if expected_rep === :power_series
-    powers = Float32[x^(n - 1) for x in xs, n in 1:size(out, 1)]
-    powers * out
-  else
-    mu = view(out, 1:1, :); k = view(out, 2:2, :)
-    A = view(out, 3:3, :); B = view(out, 4:4, :)
-    pterm = LF.PTERM
-    xe = Float32[x^(2n) for x in xs, n in 0:pterm]
-    xo = Float32[x^(2n + 1) for x in xs, n in 0:pterm]
-    kpow = k .^ Float32.(collect(0:pterm))
-    C = xe * (LF.CS_COEFF_C .* kpow)
-    S = xo * (LF.CS_COEFF_S .* kpow)
-    exp.(xs * mu) .* (A .* C .+ B .* S)
-  end
-  numer = vec(sum(abs2, upred .- utrue; dims=1))
-  denom = vec(sum(abs2, utrue; dims=1)) .+ 1f-12
-  errors = sqrt.(numer ./ denom)
-  return permutedims(reshape(errors, length(taus), length(deltas)))
-end
-
 function contour_panel(taus, deltas, errors, title, clims; colorbar=true)
   logerr = log10.(max.(errors, 1e-5))
   p = heatmap(taus, deltas, logerr; c=:viridis, clims=clims,
@@ -278,16 +256,30 @@ function contour_panel(taus, deltas, errors, title, clims; colorbar=true)
   return p
 end
 
-function write_contour_charts(results_root, output_dir, ng, limit)
-  taus, deltas, ts, ds = ordered_plane(limit, ng)
-  xs = Float32.(collect(range(0.0f0, 1.0f0, length=50)))
-  utrue = analytic_solutions(ts, ds, xs)
-  maps = Dict{Tuple{Symbol,Symbol},Matrix{Float32}}()
-  for rep in REPRESENTATIONS, region in REGIONS
-    checkpoint = final_checkpoint(checkpoint_dir(results_root, rep, region))
-    println("Evaluating $rep / $region")
-    maps[(rep, region)] = evaluate_error_map(checkpoint, rep, taus, deltas, ts, ds, xs, utrue)
+function saved_error_map(entry, ng, limit)
+  taus = collect(range(-limit, limit, length=ng))
+  deltas = collect(range(-limit, limit, length=ng))
+  matrix = fill(Float32(NaN), ng, ng)
+  for (point, error) in zip(entry["points"], entry["errors"])
+    i = argmin(abs.(taus .- Float32(point["tau"])))
+    j = argmin(abs.(deltas .- Float32(point["delta"])))
+    matrix[j, i] = Float32(error)
   end
+  all(isfinite, matrix) || error("Saved generalization map is incomplete")
+  return Float32.(taus), Float32.(deltas), matrix
+end
+
+function write_contour_charts(results_root, output_dir, ng, limit)
+  suite = JSON.parsefile(joinpath(results_root, "data", "generalization-suite.json"))
+  maps = Dict{Tuple{Symbol,Symbol},Matrix{Float32}}()
+  axes = nothing
+  for rep in REPRESENTATIONS, region in REGIONS
+    entry = suite["results"][String(rep)]["generalization_radius"][String(region)]
+    taus, deltas, matrix = saved_error_map(entry, ng, limit)
+    axes = (taus, deltas)
+    maps[(rep, region)] = matrix
+  end
+  taus, deltas = axes
   all_log_errors = vcat([vec(log10.(max.(m, 1e-5))) for m in values(maps)]...)
   clims = (max(-5.0, minimum(all_log_errors)), min(2.0, maximum(all_log_errors)))
 
@@ -307,6 +299,115 @@ function write_contour_charts(results_root, output_dir, ng, limit)
   fig = plot(panels...; layout=(6, 2), size=(1500, 3000),
              plot_title="Family-trained generalization — representation comparison | contours ε=10⁻⁴…10⁰")
   save_png(fig, joinpath(output_dir, "side-by-side-contours.png"))
+
+  global_panels = Plots.Plot[]
+  for rep in REPRESENTATIONS
+    entry = suite["results"][String(rep)]["generalization_radius"]["global"]
+    _, _, matrix = saved_error_map(entry, ng, limit)
+    push!(global_panels, contour_panel(taus, deltas, matrix,
+      "Global — $(replace(String(rep), "_" => " "))", clims))
+  end
+  save_png(plot(global_panels...; layout=(1, 2), size=(1400, 650),
+                plot_title="Global-model generalization"),
+           joinpath(output_dir, "global-side-by-side-contours.png"))
+end
+
+function write_extrapolation_charts(results_root, output_dir)
+  suite = JSON.parsefile(joinpath(results_root, "data", "generalization-suite.json"))
+  for rep in REPRESENTATIONS
+    panels = Plots.Plot[]
+    data = suite["results"][String(rep)]["extrapolation"]
+    for region in REGIONS
+      entries = data[String(region)]
+      radii = sort(parse.(Int, collect(keys(entries))))
+      errors = [entries[string(radius)]["relerr"] for radius in radii]
+      push!(panels, plot(radii, positive(errors); marker=:circle, lw=2,
+        yscale=:log10, label=false, title=REGION_TITLES[region],
+        xlabel="shell radius R", ylabel="relative L2"))
+    end
+    save_png(plot(panels...; layout=(2, 3), size=(1500, 900),
+                  plot_title="In-family extrapolation — $(replace(String(rep), "_" => " "))"),
+             joinpath(output_dir, "$(replace(String(rep), "_" => "-"))-extrapolation.png"))
+  end
+end
+
+function write_range_charts(results_root, output_dir)
+  suite = JSON.parsefile(joinpath(results_root, "data", "generalization-suite.json"))
+  for rep in REPRESENTATIONS
+    panels = Plots.Plot[]
+    data = suite["results"][String(rep)]["cross_region_range"]
+    for train_region in REGIONS
+      p = plot(; yscale=:log10, title="trained: $(replace(String(train_region), "_" => " "))",
+               xlabel="shell radius R", ylabel="relative L2", legendfontsize=6)
+      entries = data[String(train_region)]
+      for test_region in REGIONS
+        radii = sort(parse.(Int, [split(key, "/")[2] for key in keys(entries)
+                                  if startswith(key, "$(test_region)/")]))
+        errors = [entries["$(test_region)/$(radius)"]["relerr"] for radius in radii]
+        plot!(p, radii, positive(errors); marker=:circle, lw=1.7,
+              label=replace(String(test_region), "_" => " "))
+      end
+      push!(panels, p)
+    end
+    save_png(plot(panels...; layout=(2, 3), size=(1600, 950),
+                  plot_title="Cross-family range — $(replace(String(rep), "_" => " "))"),
+             joinpath(output_dir, "$(replace(String(rep), "_" => "-"))-range.png"))
+  end
+end
+
+function write_showcase_chart(results_root, output_dir)
+  suite = JSON.parsefile(joinpath(results_root, "data", "generalization-suite.json"))
+  names = ["memorize", "in-family", "out-range-a", "out-range-b",
+           "out-family-c", "out-family-d"]
+  ps = [suite["results"]["power_series"]["showcase"][name]["relerr"] for name in names]
+  ev = [suite["results"]["eigenvalue"]["showcase"][name]["relerr"] for name in names]
+  p = bar(names, hcat(positive(ps), positive(ev)); bar_position=:dodge,
+    label=["power series" "eigenvalue"], yscale=:log10, xrotation=25,
+    ylabel="solution relative L2", title="Global-model showcase")
+  save_png(p, joinpath(output_dir, "representation-comparison.png"))
+
+  xs = Float64.(suite["solution_x"])
+  panels = Plots.Plot[]
+  for name in names
+    ps_entry = suite["results"]["power_series"]["showcase"][name]
+    ev_entry = suite["results"]["eigenvalue"]["showcase"][name]
+    curve = plot(xs, Float64.(ps_entry["truth"]); color=:black, lw=2.6,
+                 label="truth", title=replace(name, "-" => " "),
+                 xlabel="x", ylabel="u(x)", titlefontsize=9,
+                 legendfontsize=6)
+    plot!(curve, xs, Float64.(ps_entry["predicted"]); color=:dodgerblue,
+          lw=2, ls=:dash, label="power series")
+    plot!(curve, xs, Float64.(ev_entry["predicted"]); color=:darkorange,
+          lw=2, ls=:dot, label="eigenvalue")
+    push!(panels, curve)
+  end
+  save_png(plot(panels...; layout=(2, 3), size=(1500, 900),
+                plot_title="Global-model showcase solution curves"),
+           joinpath(output_dir, "solution-curves.png"))
+end
+
+function write_coverage_charts(results_root, output_dir)
+  suite = JSON.parsefile(joinpath(results_root, "data", "generalization-suite.json"))
+  thresholds = 10.0 .^ (-4:0)
+  for rep in REPRESENTATIONS
+    p = plot(; xscale=:log10, xlabel="relative-L2 threshold ε",
+             ylabel="grid fraction with error ≤ ε", ylims=(0, 1),
+             title="Generalization coverage — $(replace(String(rep), "_" => " "))",
+             legendfontsize=6)
+    maps = suite["results"][String(rep)]["generalization_radius"]
+    for region in REGIONS
+      coverage = maps[String(region)]["coverage_fraction"]
+      values = [coverage[string(threshold)] for threshold in thresholds]
+      plot!(p, thresholds, values; marker=:circle, lw=2,
+            label=replace(String(region), "_" => " "))
+    end
+    coverage = maps["global"]["coverage_fraction"]
+    values = [coverage[string(threshold)] for threshold in thresholds]
+    plot!(p, thresholds, values; marker=:diamond, lw=3, color=:black,
+          label="global")
+    save_png(p, joinpath(output_dir,
+      "$(replace(String(rep), "_" => "-"))-coverage.png"))
+  end
 end
 
 function main(args=ARGS)
@@ -318,6 +419,10 @@ function main(args=ARGS)
   write_transfer_charts(opts.results_root, joinpath(opts.chart_root, "transfer"))
   write_contour_charts(opts.results_root, joinpath(opts.chart_root, "family-generalization"),
                        opts.ng, opts.map_limit)
+  write_coverage_charts(opts.results_root, joinpath(opts.chart_root, "generalization-coverage"))
+  write_extrapolation_charts(opts.results_root, joinpath(opts.chart_root, "extrapolation"))
+  write_range_charts(opts.results_root, joinpath(opts.chart_root, "cross-region-range"))
+  write_showcase_chart(opts.results_root, joinpath(opts.chart_root, "showcase"))
   println("Study charts written under $(opts.chart_root)")
   return nothing
 end

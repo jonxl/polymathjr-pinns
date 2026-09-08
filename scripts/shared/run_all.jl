@@ -8,6 +8,8 @@ using JSON
 using CUDA
 using Zygote
 using ProgressMeter
+using Serialization
+using SHA
 
 include("../../architectures/PINN.jl")
 using .PINN
@@ -22,14 +24,12 @@ const REGIONS = [:saddle, :stable_node, :unstable_node,
 const DATASET_SEED = parse(Int, get(ENV, "DUAL_DATASET_SEED", "10001"))
 const SHUFFLE_SEED = parse(Int, get(ENV, "DUAL_SHUFFLE_SEED", "40001"))
 const MODEL_SEED = parse(Int, get(ENV, "DUAL_MODEL_SEED", "1234"))
-const RUN_NAME = "dataset-$(DATASET_SEED)-shuffle-$(SHUFFLE_SEED)-model-$(MODEL_SEED)"
-const OUTPUT_ROOT = joinpath("results/dual-representation-10m", RUN_NAME)
-const TRAIN_SIZE = 10_000_000
-const VALIDATION_SIZE = 500_000
-const TEST_SIZE = 1_000_000
-const BATCH_SIZE = 16_384
-const EPOCHS = 100
-const CHECKPOINT_EPOCH_INTERVAL = 5
+const TRAIN_SIZE = parse(Int, get(ENV, "DUAL_TRAIN_SIZE", "10000000"))
+const VALIDATION_SIZE = parse(Int, get(ENV, "DUAL_VALIDATION_SIZE", "500000"))
+const TEST_SIZE = parse(Int, get(ENV, "DUAL_TEST_SIZE", "1000000"))
+const BATCH_SIZE = parse(Int, get(ENV, "DUAL_BATCH_SIZE", "16384"))
+const EPOCHS = parse(Int, get(ENV, "DUAL_EPOCHS", "100"))
+const CHECKPOINT_EPOCH_INTERVAL = parse(Int, get(ENV, "DUAL_CHECKPOINT_EPOCHS", "5"))
 const N = 20
 const NEURON_COUNT = 64
 const NUM_POINTS = 50
@@ -38,7 +38,11 @@ const VALIDATION_SEED = DATASET_SEED + 10_000
 const TEST_SEED = DATASET_SEED + 20_000
 const RUN_GLOBAL_MODELS = true
 const RUN_FAMILY_MODELS = true
-const GPU_COUNT = 8
+const GPU_COUNT = parse(Int, get(ENV, "DUAL_GPU_COUNT", "8"))
+const RUN_NAME = "dataset-$(DATASET_SEED)-shuffle-$(SHUFFLE_SEED)-model-$(MODEL_SEED)-batch-$(BATCH_SIZE)"
+const STUDY_ROOT = get(ENV, "DUAL_STUDY_ROOT",
+  joinpath("results", "dual-rep-studies", "dual-representation-10m"))
+const OUTPUT_ROOT = joinpath(STUDY_ROOT, RUN_NAME)
 
 # Live display backend: "progress" (ProgressMeter, one bar per GPU, offset-
 # stacked) or "tui" (the hand-rolled TUI.GPUBoard). Select with
@@ -47,30 +51,107 @@ const DISPLAY_MODE = get(ENV, "DUAL_DISPLAY", "progress")
 DISPLAY_MODE in ("tui", "progress") ||
   error("DUAL_DISPLAY must be \"tui\" or \"progress\", got $(repr(DISPLAY_MODE))")
 
-const TRAIN_SPLIT = CanonicalODESplit(:train, TRAIN_SIZE, TRAIN_SEED, N;
+const TRAIN_RECIPE = CanonicalODESplit(:train, TRAIN_SIZE, TRAIN_SEED, N;
   shuffle_seed=SHUFFLE_SEED, regions=REGIONS)
-const VALIDATION_SPLIT = CanonicalODESplit(:validation, VALIDATION_SIZE, VALIDATION_SEED, N;
+const VALIDATION_RECIPE = CanonicalODESplit(:validation, VALIDATION_SIZE, VALIDATION_SEED, N;
   shuffle_seed=SHUFFLE_SEED + 10_000, regions=REGIONS)
-const TEST_SPLIT = CanonicalODESplit(:test, TEST_SIZE, TEST_SEED, N;
+const TEST_RECIPE = CanonicalODESplit(:test, TEST_SIZE, TEST_SEED, N;
   shuffle_seed=SHUFFLE_SEED + 20_000, regions=REGIONS)
 
-split_manifest(split) = Dict(
-  "name" => String(split.name),
-  "size" => split.size,
-  "seed" => string(split.seed),
-  "shuffle_seed" => string(split.shuffle_seed),
-  "dataset_id" => dataset_id(split),
-  "regions" => String.(split.regions),
-  "power_series_degree" => split.N,
-  "materialization" => "deterministic streaming by canonical index",
-)
+# Materialize the exact ODE populations before any model starts. Both
+# representations subsequently read these same memory-mapped arrays.
+const TRAIN_SPLIT = materialize_split(TRAIN_RECIPE, joinpath(OUTPUT_ROOT, "datasets", "train"))
+const VALIDATION_SPLIT = materialize_split(VALIDATION_RECIPE, joinpath(OUTPUT_ROOT, "datasets", "validation"))
+const TEST_SPLIT = materialize_split(TEST_RECIPE, joinpath(OUTPUT_ROOT, "datasets", "test"))
+
+split_manifest(split::MaterializedODESplit) =
+  JSON.parsefile(joinpath(split.root, "manifest.json"))
+
+function git_commit()
+  try
+    return readchomp(`git rev-parse HEAD`)
+  catch
+    return "unknown"
+  end
+end
+
+const SOURCE_SNAPSHOT_FILES = [
+  "Project.toml",
+  "Manifest.toml",
+  "architectures/PINN.jl",
+  "utils/ProgressBar.jl",
+  "utils/dual_dataset.jl",
+  "utils/dual_study_evaluation.jl",
+  "utils/gpu_utils.jl",
+  "utils/helper_funcs.jl",
+  "utils/loss_functions.jl",
+  "utils/plugboard.jl",
+  "utils/safetensors_utils.jl",
+  "utils/tui.jl",
+  "scripts/charts/dual_representation_study.jl",
+  "scripts/shared/bundle_study.jl",
+  "scripts/shared/evaluate_study.jl",
+  "scripts/shared/infer_points.jl",
+  "scripts/shared/run_all.jl",
+  "scripts/shared/run_portable_study.sh",
+]
+
+sha256_file(path) = open(io -> bytes2hex(sha256(io)), path, "r")
+
+function source_snapshot_manifest()
+  files = [Dict(
+    "path" => relative,
+    "bytes" => filesize(relative),
+    "sha256" => sha256_file(relative),
+  ) for relative in SOURCE_SNAPSHOT_FILES]
+  tree_id = bytes2hex(sha256(join(
+    ("$(entry[\"path\"]):$(entry[\"sha256\"])" for entry in files), "\n")))
+  return Dict(
+    "format" => "polymathjr-study-source-snapshot",
+    "format_version" => 1,
+    "git_commit" => git_commit(),
+    "source_tree_id" => tree_id,
+    "files" => files,
+  )
+end
+
+function write_environment_snapshot(manifest)
+  environment_root = joinpath(OUTPUT_ROOT, "environment")
+  source_root = joinpath(environment_root, "source")
+  mkpath(source_root)
+  for entry in manifest["files"]
+    relative = entry["path"]
+    target = joinpath(source_root, relative)
+    if isfile(target)
+      sha256_file(target) == entry["sha256"] || error(
+        "Existing source snapshot differs at $target; study bundles are immutable")
+    else
+      mkpath(dirname(target))
+      cp(relative, target)
+    end
+  end
+  manifest_path = joinpath(environment_root, "source-manifest.json")
+  if isfile(manifest_path)
+    existing = JSON.parsefile(manifest_path)
+    existing == manifest || error(
+      "Existing source manifest differs at $manifest_path; study bundles are immutable")
+  else
+    open(manifest_path, "w") do io
+      JSON.print(io, manifest, 2)
+    end
+  end
+end
 
 function run_config()
   global_batches = batches_per_epoch(TRAIN_SPLIT, BATCH_SIZE)
+  source = source_snapshot_manifest()
   Dict(
     "study" => "dual-representation",
+    "bundle_format_version" => 1,
     "created_at" => Dates.format(now(UTC), dateformat"yyyy-mm-ddTHH:MM:SSZ"),
     "output_root" => OUTPUT_ROOT,
+    "git_commit" => git_commit(),
+    "source_tree_id" => source["source_tree_id"],
     "representations" => ["power_series", "eigenvalue"],
     "training" => Dict(
       "epochs" => EPOCHS,
@@ -94,26 +175,36 @@ function run_config()
       "validation" => split_manifest(VALIDATION_SPLIT),
       "test" => split_manifest(TEST_SPLIT),
     ),
-    "experimental_control" => "Both representations use identical canonical ODE indices, split seeds, epoch permutations, and minibatches.",
+    "experimental_control" => "Both representations read identical materialized ODE records and use identical epoch permutations and minibatches.",
     "test_policy" => "The final test split is not used for training, checkpoint selection, or hyperparameter selection.",
   )
 end
 
 function write_run_manifests()
   mkpath(OUTPUT_ROOT)
-  mkpath(joinpath(OUTPUT_ROOT, "datasets"))
+  source = source_snapshot_manifest()
+  write_environment_snapshot(source)
   cfg = run_config()
-  open(joinpath(OUTPUT_ROOT, "config.json"), "w") do io
-    JSON.print(io, cfg, 2)
-  end
-  for split in (TRAIN_SPLIT, VALIDATION_SPLIT, TEST_SPLIT)
-    open(joinpath(OUTPUT_ROOT, "datasets", "$(split.name)-manifest.json"), "w") do io
-      JSON.print(io, split_manifest(split), 2)
+  config_path = joinpath(OUTPUT_ROOT, "config.json")
+  if isfile(config_path)
+    existing = JSON.parsefile(config_path)
+    for key in ("bundle_format_version", "source_tree_id", "representations", "training", "splits",
+                "experimental_control", "test_policy")
+      get(existing, key, nothing) == get(cfg, key, nothing) || error(
+        "Existing study configuration differs at '$key': $config_path\n" *
+        "Use a new DUAL_STUDY_ROOT; study bundles are immutable."
+      )
+    end
+  else
+    open(config_path, "w") do io
+      JSON.print(io, cfg, 2)
     end
   end
-  open(joinpath(OUTPUT_ROOT, "config.md"), "w") do io
+  config_md_path = joinpath(OUTPUT_ROOT, "config.md")
+  isfile(config_md_path) && return
+  open(config_md_path, "w") do io
     println(io, "# Dual-representation 10M training configuration\n")
-    println(io, "Both representations train on the same canonical ODE indices and minibatches. The power-series and eigenvalue targets are derived from each shared ODE; they are not independently sampled datasets.\n")
+    println(io, "This directory is a portable study bundle. Both representations train from the same checksummed, materialized ODE records. Power-series and eigenvalue targets are derived from each shared ODE; they are not independently sampled datasets.\n")
     println(io, "- Training ODEs: **$(TRAIN_SIZE)**")
     println(io, "- Validation ODEs: **$(VALIDATION_SIZE)**")
     println(io, "- Final untouched test ODEs: **$(TEST_SIZE)**")
@@ -132,8 +223,39 @@ function write_run_manifests()
     println(io, "- Final power-series filename: `model-dense-mlp-p009877.checkpoint`")
     println(io, "- Final eigenvalue filename: `model-dense-mlp-p008772.checkpoint`")
     println(io, "- Train dataset ID: `$(dataset_id(TRAIN_SPLIT))`")
+    println(io, "- Source Git commit: `$(git_commit())`")
+    println(io, "- Source tree ID: `$(cfg["source_tree_id"])`")
+    println(io, "- Dataset storage: `datasets/{train,validation,test}/{tau.f32,delta.f32,region.u8,manifest.json}`")
     println(io, "\nValidation selects checkpoints. The final test split is evaluated only after the training configuration and checkpoint are fixed.")
   end
+end
+
+function validate_completed_checkpoint(path::AbstractString, representation::Symbol,
+                                       scope::Symbol, region, expected_updates::Int)
+  payload = deserialize(path)
+  expected = Dict{String,Any}(
+    "representation" => String(representation),
+    "scope" => String(scope),
+    "family" => region === nothing ? "all" : String(region),
+    "dataset_id" => dataset_id(TRAIN_SPLIT),
+    "dataset_seed" => DATASET_SEED,
+    "shuffle_seed" => SHUFFLE_SEED,
+    "model_seed" => MODEL_SEED,
+    "batch_size" => BATCH_SIZE,
+    "epoch" => EPOCHS,
+    "optimizer_updates" => expected_updates,
+    "power_series_degree" => N,
+  )
+  mismatches = String[]
+  for (key, value) in expected
+    get(payload, key, nothing) == value ||
+      push!(mismatches, "$key=$(repr(get(payload, key, nothing))) (expected $(repr(value)))")
+  end
+  isempty(mismatches) || error(
+    "Existing final checkpoint is incompatible with this run: $path\n  " * join(mismatches, "\n  ") *
+    "\nUse a new DUAL_STUDY_ROOT or a different fully qualified run directory; do not mix studies."
+  )
+  return true
 end
 
 function dummy_dataset(split, region=nothing)
@@ -227,6 +349,7 @@ function train_model(representation::Symbol, scope::Symbol;
   mkpath(output_dir)
   final_model_path = joinpath(output_dir, "model-dense-mlp-$(parameter_tag).checkpoint")
   if isfile(final_model_path)
+    validate_completed_checkpoint(final_model_path, representation, scope, region, maxiters)
     @info "Skipping completed model" representation scope=scope_name path=final_model_path
     if board !== nothing
       display_skip!(board, gpu_slot, device_labels[gpu_slot], scope_name, representation, maxiters)
