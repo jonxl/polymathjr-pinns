@@ -41,7 +41,7 @@ This project trains PINNs to learn representations of linear ODE solutions. The 
 ### Concepts
 - [Hyperparameter Tuning](concepts/hyperparameter-tuning.md) - Tuning strategies
 - [Training Workflow](concepts/training-workflow.md) - Complete pipeline
-- [Power-Series Loss Audit](concepts/power-series-loss-audit.md) - Coefficient conventions, factorials, residual averaging, and saved loss evidence
+- [Power-Series Loss Audit](concepts/power-series-loss-audit.md) - Representation comparison table, loss equations, training diagnostics, and coefficient conventions
 
 ### Data Formats
 - [Training Dataset](data-formats/training-dataset.md) - JSON format

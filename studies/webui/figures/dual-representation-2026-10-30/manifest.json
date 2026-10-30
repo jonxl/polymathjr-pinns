@@ -1,0 +1,405 @@
+{
+  "date": "2026-10-30",
+  "source_commit": "bb2a102a",
+  "comparisons": [
+    {
+      "name": "shared_extrapolate",
+      "mode": "archived results; matching controls not recorded",
+      "metadata": {
+        "shape": "extrapolate",
+        "representation": "power_series",
+        "Rmax": 4,
+        "regions": [
+          "saddle",
+          "stable_node",
+          "unstable_node",
+          "stable_spiral",
+          "unstable_spiral",
+          "center"
+        ]
+      },
+      "sources": [
+        {
+          "path": "/home/archimedes/code/polymathjr/pinns/data/shared_extrapolate_power_series.json",
+          "sha256": "dbd48d5b27d21520c36f92acae09f54da1c1fe40ae8d947caad43d53868f0951"
+        },
+        {
+          "path": "/home/archimedes/code/polymathjr/pinns/data/shared_extrapolate_eigenvalue.json",
+          "sha256": "68ae893e51422198553c43fc27be9c22187328700cb224e90d100ab4e775685e"
+        }
+      ],
+      "figures": [
+        "figures/dual-representation-2026-10-30/01-shared_extrapolate-01-extrap_curves.png"
+      ],
+      "training_diagnostics": [],
+      "unavailable_figures": []
+    },
+    {
+      "name": "shared_genradius_disk",
+      "mode": "disk",
+      "metadata": {
+        "shape": "gen_radius",
+        "Lmap": 4.0,
+        "mode": "disk",
+        "Ng": 21,
+        "eps_tol": 0.1,
+        "representation": "power_series"
+      },
+      "sources": [
+        {
+          "path": "/home/archimedes/code/polymathjr/pinns/data/shared_genradius_disk_power_series.json",
+          "sha256": "4a91af69e8fb30a4119c1c92d022a97de3b9400c22527b5f91adfa584905ffe7"
+        },
+        {
+          "path": "/home/archimedes/code/polymathjr/pinns/data/shared_genradius_disk_eigenvalue.json",
+          "sha256": "56f064b2bcb90452a30590fbe3e8e1d193cc2712d61bffbf618517be8bd66a3f"
+        }
+      ],
+      "figures": [
+        "figures/dual-representation-2026-10-30/02-shared_genradius_disk-01-genradius_map.png"
+      ],
+      "training_diagnostics": [],
+      "unavailable_figures": []
+    },
+    {
+      "name": "shared_genradius_family",
+      "mode": "family",
+      "metadata": {
+        "shape": "gen_radius",
+        "Lmap": 4.0,
+        "mode": "family",
+        "Ng": 21,
+        "eps_tol": 0.1,
+        "representation": "power_series"
+      },
+      "sources": [
+        {
+          "path": "/home/archimedes/code/polymathjr/pinns/data/shared_genradius_family_power_series.json",
+          "sha256": "b8055e427d9db70dbe4c9d23dc4d0d68a7a8aae95003ac143e1eb1e5e7b2fa87"
+        },
+        {
+          "path": "/home/archimedes/code/polymathjr/pinns/data/shared_genradius_family_eigenvalue.json",
+          "sha256": "f0ef1c761c9dfc9342a613feed9d6093cd26a55a48e46a9bd10ce36ac93a6744"
+        }
+      ],
+      "figures": [
+        "figures/dual-representation-2026-10-30/03-shared_genradius_family-01-genradius_family_saddle.png",
+        "figures/dual-representation-2026-10-30/03-shared_genradius_family-02-genradius_family_stable_node.png",
+        "figures/dual-representation-2026-10-30/03-shared_genradius_family-03-genradius_family_unstable_node.png",
+        "figures/dual-representation-2026-10-30/03-shared_genradius_family-04-genradius_family_stable_spiral.png",
+        "figures/dual-representation-2026-10-30/03-shared_genradius_family-05-genradius_family_unstable_spiral.png",
+        "figures/dual-representation-2026-10-30/03-shared_genradius_family-06-genradius_family_center.png",
+        "figures/dual-representation-2026-10-30/03-shared_genradius_family-07-genradius_areas.png"
+      ],
+      "training_diagnostics": [],
+      "unavailable_figures": []
+    },
+    {
+      "name": "shared_range",
+      "mode": "archived results; matching controls not recorded",
+      "metadata": {
+        "shape": "cross_region_range",
+        "train_regions": [
+          "saddle",
+          "stable_node",
+          "unstable_node",
+          "stable_spiral",
+          "unstable_spiral",
+          "center"
+        ],
+        "test_regions": [
+          "saddle",
+          "stable_node",
+          "unstable_node",
+          "stable_spiral",
+          "unstable_spiral",
+          "center"
+        ],
+        "representation": "power_series",
+        "Rmax": 4
+      },
+      "sources": [
+        {
+          "path": "/home/archimedes/code/polymathjr/pinns/data/shared_range_power_series.json",
+          "sha256": "e0fc2c0ab328583c515b52ef95100b78d9ae9645dc3b006e40772b0b84cca712"
+        },
+        {
+          "path": "/home/archimedes/code/polymathjr/pinns/data/shared_range_eigenvalue.json",
+          "sha256": "e6e8b3b1f95dcb45aed8d108a87fb0fdb4287fedeb184d2c82c56e301c0db566"
+        }
+      ],
+      "figures": [
+        "figures/dual-representation-2026-10-30/04-shared_range-01-range_saddle.png",
+        "figures/dual-representation-2026-10-30/04-shared_range-02-range_stable_node.png",
+        "figures/dual-representation-2026-10-30/04-shared_range-03-range_unstable_node.png",
+        "figures/dual-representation-2026-10-30/04-shared_range-04-range_stable_spiral.png",
+        "figures/dual-representation-2026-10-30/04-shared_range-05-range_unstable_spiral.png",
+        "figures/dual-representation-2026-10-30/04-shared_range-06-range_center.png"
+      ],
+      "training_diagnostics": [],
+      "unavailable_figures": []
+    },
+    {
+      "name": "shared_showcase",
+      "mode": "archived results; matching controls not recorded",
+      "metadata": {
+        "shape": "showcase",
+        "representation": "power_series"
+      },
+      "sources": [
+        {
+          "path": "/home/archimedes/code/polymathjr/pinns/data/shared_showcase_power_series.json",
+          "sha256": "6297af32ab9ce08766d41d239fdbcc29e1f0cec77c368d63e7a0ca0436aeab97"
+        },
+        {
+          "path": "/home/archimedes/code/polymathjr/pinns/data/shared_showcase_eigenvalue.json",
+          "sha256": "642cb412686089d27adc1f5897b6d47eea2753b4071da05425d2a0ac2288f816"
+        }
+      ],
+      "figures": [
+        "figures/dual-representation-2026-10-30/05-shared_showcase-02-showcase_bars.png"
+      ],
+      "training_diagnostics": [],
+      "unavailable_figures": [
+        {
+          "id": "showcase_curves",
+          "reason": "Saved series 'memorize' has 200 x coordinates but 50 y values; regenerate this source panel"
+        }
+      ]
+    },
+    {
+      "name": "shared_transfer",
+      "mode": "archived results; matching controls not recorded",
+      "metadata": {
+        "n_per_region": 5,
+        "shape": "transfer",
+        "train_regions": [
+          "saddle",
+          "stable_node",
+          "unstable_node",
+          "stable_spiral",
+          "unstable_spiral",
+          "center"
+        ],
+        "test_regions": [
+          "saddle",
+          "stable_node",
+          "unstable_node",
+          "stable_spiral",
+          "unstable_spiral",
+          "center"
+        ],
+        "representation": "power_series"
+      },
+      "sources": [
+        {
+          "path": "/home/archimedes/code/polymathjr/pinns/data/shared_transfer_power_series.json",
+          "sha256": "5ebe45cb79782968461c6d0711d3249ff403a1844798d3e52d6f14901e9a9e3d"
+        },
+        {
+          "path": "/home/archimedes/code/polymathjr/pinns/data/shared_transfer_eigenvalue.json",
+          "sha256": "d0ab6655972fe78e24941adf361574b79d3605bf819d8cf9e3a40c1fba3d7e36"
+        }
+      ],
+      "figures": [
+        "figures/dual-representation-2026-10-30/06-shared_transfer-01-transfer_relerr.png"
+      ],
+      "training_diagnostics": [
+        {
+          "representation": "power_series",
+          "figure": "figures/dual-representation-2026-10-30/06-shared_transfer-02-transfer_pde-power_series-diagnostic.png",
+          "scale": "independent"
+        },
+        {
+          "representation": "eigenvalue",
+          "figure": "figures/dual-representation-2026-10-30/06-shared_transfer-02-transfer_pde-eigenvalue-diagnostic.png",
+          "scale": "independent"
+        },
+        {
+          "representation": "power_series",
+          "figure": "figures/dual-representation-2026-10-30/06-shared_transfer-03-transfer_bc-power_series-diagnostic.png",
+          "scale": "independent"
+        },
+        {
+          "representation": "eigenvalue",
+          "figure": "figures/dual-representation-2026-10-30/06-shared_transfer-03-transfer_bc-eigenvalue-diagnostic.png",
+          "scale": "independent"
+        },
+        {
+          "representation": "power_series",
+          "figure": "figures/dual-representation-2026-10-30/06-shared_transfer-04-transfer_sup-power_series-diagnostic.png",
+          "scale": "independent"
+        },
+        {
+          "representation": "eigenvalue",
+          "figure": "figures/dual-representation-2026-10-30/06-shared_transfer-04-transfer_sup-eigenvalue-diagnostic.png",
+          "scale": "independent"
+        },
+        {
+          "representation": "power_series",
+          "figure": "figures/dual-representation-2026-10-30/06-shared_transfer-05-component_bars-power_series-diagnostic.png",
+          "scale": "independent"
+        },
+        {
+          "representation": "eigenvalue",
+          "figure": "figures/dual-representation-2026-10-30/06-shared_transfer-05-component_bars-eigenvalue-diagnostic.png",
+          "scale": "independent"
+        }
+      ],
+      "unavailable_figures": []
+    }
+  ],
+  "geometry_status": {
+    "family_disks": "Results not found",
+    "spiral_transfer": "Results not found",
+    "pair_transfer": "Results not found",
+    "parabola_segment": "Results not found",
+    "parabola_slide": "Results not found",
+    "parabola_curves": "Results not found",
+    "parabola_bias": "Results not found",
+    "axis_transfer": "Results not found",
+    "axis_sweep": "Results not found"
+  },
+  "training_histories": [
+    {
+      "source": "/home/archimedes/code/polymathjr/pinns/results/dual-rep-studies/dual-representation-10m/dataset-10001-shuffle-40001-model-1235/family/center/power_series/loss.csv",
+      "sha256": "a52816325d3594431097ffcab5d599e385f25427905a6d99b9467dd26cf8eafb",
+      "representation": "power_series",
+      "samples": 103,
+      "first_iteration": 1.0,
+      "last_iteration": 10200.0,
+      "figure": "figures/dual-representation-2026-10-30/training-01-dual-representation-10m-dataset-10001-shuffle-40001-model-1235-family-center-power_series.png",
+      "data": "figures/dual-representation-2026-10-30/training-01-dual-representation-10m-dataset-10001-shuffle-40001-model-1235-family-center-power_series.csv"
+    },
+    {
+      "source": "/home/archimedes/code/polymathjr/pinns/results/dual-rep-studies/dual-representation-10m/dataset-10001-shuffle-40001-model-1235/family/center/eigenvalue/loss.csv",
+      "sha256": "fe2eea18f6c55f9154b498ea1d313008665580b97a1b67f130069371ac970a68",
+      "representation": "eigenvalue",
+      "samples": 103,
+      "first_iteration": 1.0,
+      "last_iteration": 10200.0,
+      "figure": "figures/dual-representation-2026-10-30/training-02-dual-representation-10m-dataset-10001-shuffle-40001-model-1235-family-center-eigenvalue.png",
+      "data": "figures/dual-representation-2026-10-30/training-02-dual-representation-10m-dataset-10001-shuffle-40001-model-1235-family-center-eigenvalue.csv"
+    },
+    {
+      "source": "/home/archimedes/code/polymathjr/pinns/results/dual-rep-studies/dual-representation-10m/dataset-10001-shuffle-40001-model-1235/family/saddle/power_series/loss.csv",
+      "sha256": "bfe99b0bf77fe217508925f5a552db3ed1e8b58b219f23b146559e0905cb450e",
+      "representation": "power_series",
+      "samples": 205,
+      "first_iteration": 1.0,
+      "last_iteration": 20400.0,
+      "figure": "figures/dual-representation-2026-10-30/training-03-dual-representation-10m-dataset-10001-shuffle-40001-model-1235-family-saddle-power_series.png",
+      "data": "figures/dual-representation-2026-10-30/training-03-dual-representation-10m-dataset-10001-shuffle-40001-model-1235-family-saddle-power_series.csv"
+    },
+    {
+      "source": "/home/archimedes/code/polymathjr/pinns/results/dual-rep-studies/dual-representation-10m/dataset-10001-shuffle-40001-model-1235/family/saddle/eigenvalue/loss.csv",
+      "sha256": "6b9ec0677f940d21c1d08494d04b7be322f7a87545186abcd1e6bf64577e018c",
+      "representation": "eigenvalue",
+      "samples": 205,
+      "first_iteration": 1.0,
+      "last_iteration": 20400.0,
+      "figure": "figures/dual-representation-2026-10-30/training-04-dual-representation-10m-dataset-10001-shuffle-40001-model-1235-family-saddle-eigenvalue.png",
+      "data": "figures/dual-representation-2026-10-30/training-04-dual-representation-10m-dataset-10001-shuffle-40001-model-1235-family-saddle-eigenvalue.csv"
+    },
+    {
+      "source": "/home/archimedes/code/polymathjr/pinns/results/dual-rep-studies/dual-representation-10m/dataset-10001-shuffle-40001-model-1235/family/stable_node/power_series/loss.csv",
+      "sha256": "cea0747000aeddd6f38b39a9fc6fab12978af07b8d3b5603183a35452b11a5f4",
+      "representation": "power_series",
+      "samples": 205,
+      "first_iteration": 1.0,
+      "last_iteration": 20400.0,
+      "figure": "figures/dual-representation-2026-10-30/training-05-dual-representation-10m-dataset-10001-shuffle-40001-model-1235-family-stable_node-power_series.png",
+      "data": "figures/dual-representation-2026-10-30/training-05-dual-representation-10m-dataset-10001-shuffle-40001-model-1235-family-stable_node-power_series.csv"
+    },
+    {
+      "source": "/home/archimedes/code/polymathjr/pinns/results/dual-rep-studies/dual-representation-10m/dataset-10001-shuffle-40001-model-1235/family/stable_node/eigenvalue/loss.csv",
+      "sha256": "8c4d13b3e4a9b0ef40072ad0393333143a5bde3f0428edfb700149dd1624bcaf",
+      "representation": "eigenvalue",
+      "samples": 205,
+      "first_iteration": 1.0,
+      "last_iteration": 20400.0,
+      "figure": "figures/dual-representation-2026-10-30/training-06-dual-representation-10m-dataset-10001-shuffle-40001-model-1235-family-stable_node-eigenvalue.png",
+      "data": "figures/dual-representation-2026-10-30/training-06-dual-representation-10m-dataset-10001-shuffle-40001-model-1235-family-stable_node-eigenvalue.csv"
+    },
+    {
+      "source": "/home/archimedes/code/polymathjr/pinns/results/dual-rep-studies/dual-representation-10m/dataset-10001-shuffle-40001-model-1235/family/stable_spiral/power_series/loss.csv",
+      "sha256": "39d995ecbdefc3a4bf5620cc5c3671f1e4644e45cc79ab21345b34d2acf3b018",
+      "representation": "power_series",
+      "samples": 205,
+      "first_iteration": 1.0,
+      "last_iteration": 20400.0,
+      "figure": "figures/dual-representation-2026-10-30/training-07-dual-representation-10m-dataset-10001-shuffle-40001-model-1235-family-stable_spiral-power_series.png",
+      "data": "figures/dual-representation-2026-10-30/training-07-dual-representation-10m-dataset-10001-shuffle-40001-model-1235-family-stable_spiral-power_series.csv"
+    },
+    {
+      "source": "/home/archimedes/code/polymathjr/pinns/results/dual-rep-studies/dual-representation-10m/dataset-10001-shuffle-40001-model-1235/family/stable_spiral/eigenvalue/loss.csv",
+      "sha256": "c0392291d0388c80241c7b71fcde6133377efd519984ae0cb2ed3a0e5875f91f",
+      "representation": "eigenvalue",
+      "samples": 205,
+      "first_iteration": 1.0,
+      "last_iteration": 20400.0,
+      "figure": "figures/dual-representation-2026-10-30/training-08-dual-representation-10m-dataset-10001-shuffle-40001-model-1235-family-stable_spiral-eigenvalue.png",
+      "data": "figures/dual-representation-2026-10-30/training-08-dual-representation-10m-dataset-10001-shuffle-40001-model-1235-family-stable_spiral-eigenvalue.csv"
+    },
+    {
+      "source": "/home/archimedes/code/polymathjr/pinns/results/dual-rep-studies/dual-representation-10m/dataset-10001-shuffle-40001-model-1235/family/unstable_node/power_series/loss.csv",
+      "sha256": "cfea3d1526b9a8e2e630e8fed3997148413ca7afd3005c744eb724b106183a25",
+      "representation": "power_series",
+      "samples": 205,
+      "first_iteration": 1.0,
+      "last_iteration": 20400.0,
+      "figure": "figures/dual-representation-2026-10-30/training-09-dual-representation-10m-dataset-10001-shuffle-40001-model-1235-family-unstable_node-power_series.png",
+      "data": "figures/dual-representation-2026-10-30/training-09-dual-representation-10m-dataset-10001-shuffle-40001-model-1235-family-unstable_node-power_series.csv"
+    },
+    {
+      "source": "/home/archimedes/code/polymathjr/pinns/results/dual-rep-studies/dual-representation-10m/dataset-10001-shuffle-40001-model-1235/family/unstable_node/eigenvalue/loss.csv",
+      "sha256": "ebf7caebf8125ed991d7434955f44a0d5d4ff19258e6cac99acc44062802d59b",
+      "representation": "eigenvalue",
+      "samples": 205,
+      "first_iteration": 1.0,
+      "last_iteration": 20400.0,
+      "figure": "figures/dual-representation-2026-10-30/training-10-dual-representation-10m-dataset-10001-shuffle-40001-model-1235-family-unstable_node-eigenvalue.png",
+      "data": "figures/dual-representation-2026-10-30/training-10-dual-representation-10m-dataset-10001-shuffle-40001-model-1235-family-unstable_node-eigenvalue.csv"
+    },
+    {
+      "source": "/home/archimedes/code/polymathjr/pinns/results/dual-rep-studies/dual-representation-10m/dataset-10001-shuffle-40001-model-1235/family/unstable_spiral/power_series/loss.csv",
+      "sha256": "180e2c0a7947a61a6794e247b1de8c895c001e2e17d1fb047bb7c3f049eaa8a3",
+      "representation": "power_series",
+      "samples": 103,
+      "first_iteration": 1.0,
+      "last_iteration": 10200.0,
+      "figure": "figures/dual-representation-2026-10-30/training-11-dual-representation-10m-dataset-10001-shuffle-40001-model-1235-family-unstable_spiral-power_series.png",
+      "data": "figures/dual-representation-2026-10-30/training-11-dual-representation-10m-dataset-10001-shuffle-40001-model-1235-family-unstable_spiral-power_series.csv"
+    },
+    {
+      "source": "/home/archimedes/code/polymathjr/pinns/results/dual-rep-studies/dual-representation-10m/dataset-10001-shuffle-40001-model-1235/family/unstable_spiral/eigenvalue/loss.csv",
+      "sha256": "98fa0866e102ed943872afc0be75e0ef4df4b5ef4e9aea4f04cca59e3ebe0b55",
+      "representation": "eigenvalue",
+      "samples": 205,
+      "first_iteration": 1.0,
+      "last_iteration": 20400.0,
+      "figure": "figures/dual-representation-2026-10-30/training-12-dual-representation-10m-dataset-10001-shuffle-40001-model-1235-family-unstable_spiral-eigenvalue.png",
+      "data": "figures/dual-representation-2026-10-30/training-12-dual-representation-10m-dataset-10001-shuffle-40001-model-1235-family-unstable_spiral-eigenvalue.csv"
+    },
+    {
+      "source": "/home/archimedes/code/polymathjr/pinns/results/dual-rep-studies/dual-representation-10m/dataset-10001-shuffle-40001-model-1235/global/power_series/loss.csv",
+      "sha256": "c0b76edda6db2199b6869c3ebb431a57c6b346550b15036d8ad13da5d97580fb",
+      "representation": "power_series",
+      "samples": 612,
+      "first_iteration": 1.0,
+      "last_iteration": 61100.0,
+      "figure": "figures/dual-representation-2026-10-30/training-13-dual-representation-10m-dataset-10001-shuffle-40001-model-1235-global-power_series.png",
+      "data": "figures/dual-representation-2026-10-30/training-13-dual-representation-10m-dataset-10001-shuffle-40001-model-1235-global-power_series.csv"
+    },
+    {
+      "source": "/home/archimedes/code/polymathjr/pinns/results/dual-rep-studies/dual-representation-10m/dataset-10001-shuffle-40001-model-1235/global/eigenvalue/loss.csv",
+      "sha256": "0bdc72d7bd96bc2ad086e0c4bba926e5033776d3a3e7eee31d15670f8ea8dc24",
+      "representation": "eigenvalue",
+      "samples": 612,
+      "first_iteration": 1.0,
+      "last_iteration": 61100.0,
+      "figure": "figures/dual-representation-2026-10-30/training-14-dual-representation-10m-dataset-10001-shuffle-40001-model-1235-global-eigenvalue.png",
+      "data": "figures/dual-representation-2026-10-30/training-14-dual-representation-10m-dataset-10001-shuffle-40001-model-1235-global-eigenvalue.csv"
+    }
+  ]
+}
