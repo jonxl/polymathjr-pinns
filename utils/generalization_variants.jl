@@ -81,13 +81,15 @@ end
 
 function GeneralizationSpec(name::Symbol, representation::Symbol;
                             regions::Vector{Symbol}=REGIONS,
-                            Rmax::Int=6, Ng::Int=81,
-                            n_per_region::Int=200, maxiters::Int=3000)
+                            Rmax::Int=6, Ng::Union{Int,Nothing}=nothing,
+                            n_per_region::Union{Int,Nothing}=nothing, maxiters::Int=3000)
   name in (:transfer, :extrapolate, :range, :showcase, :gen_radius, GEOMETRY_EXPERIMENTS...) || error(
     "GeneralizationSpec: unknown experiment :$name; expected one of " *
     ":transfer, :extrapolate, :range, :showcase, :gen_radius, $(GEOMETRY_EXPERIMENTS)")
   representation in (:power_series, :eigenvalue) || error(
     "GeneralizationSpec: representation must be :power_series or :eigenvalue, got :$representation")
+  controls = name in GEOMETRY_EXPERIMENTS ? GeometryExperiments.GeneralizationGeometry.jeet_controls(name) : (ng=81,n=200)
+  Ng=something(Ng,controls.ng); n_per_region=something(n_per_region,controls.n)
   return GeneralizationSpec(name, representation, copy(regions), Rmax, Ng,
                             n_per_region, maxiters)
 end
@@ -241,8 +243,8 @@ function _run_one_gen_job!(board::TUI.GPUBoard, job::GenJob)
       representation=job.spec.representation, n_per_region=job.spec.n_per_region,
       maxiters=job.spec.maxiters)
     result = run_geometry(geometry_cfg, job.spec.name;
-      output_root=job.output_dir, ng=job.spec.Ng)
-    cp(joinpath(job.output_dir, String(job.spec.name), String(job.spec.representation), "panelset.json"),
+      output_root=dirname(job.output_dir), ng=job.spec.Ng)
+    cp(joinpath(dirname(job.output_dir), String(job.spec.name), String(job.spec.representation), "panelset.json"),
        joinpath(job.output_dir, "panelset.json"); force=true)
     TUI.update!(board, job.device_id; variant=string(tag, " ✓"))
     return result

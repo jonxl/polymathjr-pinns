@@ -242,6 +242,8 @@ function save_checkpoint(path::AbstractString, p_ca, coeff_net, seed::Int;
     "architecture" => architecture,
     "seed" => seed,
     "representation" => String(representation),
+    "power_series_output_basis" => String(representation) == "power_series" ?
+      "taylor_derivative" : nothing,
     "iteration" => iteration,
     "flat" => _flat_cpu(p_ca),
   )

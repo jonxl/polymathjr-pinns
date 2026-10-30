@@ -81,4 +81,4 @@ Look for:
 
 ---
 
-*See also: [Loss Components](../concepts/loss-components.md), [helper_funcs.jl](../julia-modules/helper-funcs.md)*
+*See also: [Training Workflow](../concepts/training-workflow.md), [helper_funcs.jl](../julia-modules/helper-funcs.md)*

@@ -289,7 +289,8 @@ factorial handling was inconsistent — the numerator multiplied by a falling
 factorial but the denominator did not divide by (n+m)!, producing coefficients
 with magnitudes too large for stable PINN training. This function skips
 factorials entirely, computing pure derivative-basis coefficients aₙ = u⁽ⁿ⁾(0),
-which `monomial_from_derivative` converts to ψₙ = aₙ/n! at load time.
+which the loss evaluates as `u(x) = Σ ψₙ xⁿ/n!` during residual and solution
+evaluation.
 
 Requires a single column (no polynomial coefficients) and a nonzero leading
 coefficient.
@@ -325,8 +326,8 @@ Build a `Dict{Matrix{Float32}, Vector{Float32}}` of
 `PINNSettings.ode_matrices` expects, so it drops straight into `train_pinn`.
 
 Coefficients come from `solve_constant_coeff_series` (see its docstring for why
-not `solve_ode_series_closed_form`). They are DERIVATIVE-basis aₙ; the loss
-functions convert to the monomial basis ψₙ = aₙ/n! at buffer-build time.
+not `solve_ode_series_closed_form`). They are raw Taylor/derivative coefficients
+ψₙ = u⁽ⁿ⁾(0); the loss applies the `1/n!` factor when evaluating the solution.
 
 `regions` may be a single Symbol or a collection.
 """
@@ -362,7 +363,7 @@ function factorial_product_numeric(n_val, k, i)
 end
 
 # General variable-coefficient ODE solver — returns derivative-basis coefficients aₙ = u⁽ⁿ⁾(0).
-# No factorial terms here; monomial_from_derivative handles the ÷n! conversion downstream.
+# The loss applies the Taylor factorial during residual and solution evaluation.
 function solve_ode_series_closed_form(α_matrix, initial_conditions, num_terms)
   rows, cols = size(α_matrix)
   m = rows - 1  # ODE order
@@ -405,7 +406,8 @@ function solve_ode_series_closed_form(α_matrix, initial_conditions, num_terms)
 
     # Apply the closed form formula: a_{n+m} = -(1/c_{m,0}) * sum
     # factorial_nm = factorial(big(n + m))  # unused — denominator does not divide by (n+m)!
-    # denominator = c_m_0 * factorial_nm    # would give monomial basis, but monomial_from_derivative handles ÷n! downstream
+    # denominator = c_m_0 * factorial_nm    # derivative-basis coefficients are
+    # converted to solution values with the Taylor factorial in the loss.
     denominator = c_m_0
 
     new_coeff = -sum_term / denominator

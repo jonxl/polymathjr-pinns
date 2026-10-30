@@ -140,6 +140,11 @@ function view_panels(sets::Vector{<:PanelSpec.PanelSet};
     clear_layout!(panel_area)
     before = Set(objectid.(fig.content))
     rows, cols = auto_layout(length(set.panels))
+    if haskey(set.meta,"layout_columns")
+      cols=Int(set.meta["layout_columns"])
+      cols>0 || error("layout_columns must be positive")
+      rows=cld(length(set.panels),cols)
+    end
     for (i, panel) in enumerate(set.panels)
       r = div(i - 1, cols) + 1
       c = mod(i - 1, cols) + 1

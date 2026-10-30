@@ -42,5 +42,32 @@ end
             net,p,st,metadata=E.PINN.SafeTensorSnapshots.load_any_model(checkpoint)
             @test size(first(net(zeros(Float32,2,1),p,st)),1)==(rep===:power_series ? 5 : 4)
         end
+        paired=JSON.parsefile(joinpath(dir,"parabola_segment","comparison.json"))
+        ps=JSON.parsefile(joinpath(dir,"parabola_segment","power_series","panelset.json"))
+        eig=JSON.parsefile(joinpath(dir,"parabola_segment","eigenvalue","panelset.json"))
+        @test length(paired["panels"])==2length(ps["panels"])
+        @test [p["id"] for p in ps["panels"]]==[p["id"] for p in eig["panels"]]
+        @test ps["meta"]["design_sha256"]==eig["meta"]["design_sha256"]
+    end
+end
+
+@testset "Plugboard targets and matched-control enforcement" begin
+    dataset=E.Plugboard.generate_grid_dataset([2.],[1.],4)
+    derivatives=only(values(dataset))
+    @test derivatives≈[1.,0.,-1.,-2.,-3.]
+    cfg=E.ExperimentConfig(;N=4)
+    settings=E.settings_for(cfg,dataset;input_encoding=:trace_determinant)
+    buf=E.buffers_for(settings,dataset)
+    @test vec(buf.X)==[2.,1.]
+    @test vec(buf.DATA)≈[1.,0.,-.5,-1/3,-1/8]
+    spec=GE.GeneralizationGeometry.design(:parabola_segment;n=2,ng=2)
+    mktempdir() do root
+        first_hash=GE.ensure_contract(root,spec,cfg,200)
+        eigen=E.ExperimentConfig(;representation=:eigenvalue,N=4)
+        @test GE.ensure_contract(root,spec,eigen,200)==first_hash
+        changed=E.ExperimentConfig(;representation=:eigenvalue,N=4,seed=999)
+        @test_throws ErrorException GE.ensure_contract(root,spec,changed,200)
+        @test_throws ErrorException GE.ensure_contract(root,spec,eigen,100)
+        @test_throws ErrorException GE.ensure_contract(root,GE.GeneralizationGeometry.design(:parabola_segment;n=3,ng=2),eigen,200)
     end
 end

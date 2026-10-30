@@ -11,11 +11,13 @@ function usage()
     EXPERIMENTS: comma-separated names or all (default):
       family_disks,spiral_transfer,pair_transfer,parabola_segment,parabola_slide,
       parabola_curves,parabola_bias,axis_transfer,axis_sweep
-    N: points per patch/segment (default 200); ITERS: Adam iterations (3000);
-    NG: plane-grid resolution (31). Both representations use identical geometries,
+    N and NG default to Jeet’s per-experiment point counts and grid resolutions.
+    ITERS defaults to 3000 shared GPU Adam iterations. Both representations use identical geometries,
     trace/determinant inputs, seed 1234, and the shared GPU-capable trainer.
     Results include analytic solution relative-L2, per-point errors, convergence
-    histories, checkpoints and viewer panelset.json. Existing results are protected.
+    histories, checkpoints and viewer panelset.json. Once both heads finish,
+    comparison.json pairs their charts with common heatmap scales. controls.json
+    records the shared equations and controls; mismatched runs are rejected.
     Training uses the dual branch's PDE + supervision objective; IC is diagnostic.
     This differs from the legacy scripts' Adam/LBFGS training-to-floor protocol.
 
@@ -35,6 +37,7 @@ if isempty(ARGS) || ARGS[1] in ("-h","--help")
 end
 include("../../utils/generalization_geometry.jl")
 using .GeneralizationGeometry
+optional_int(index)=length(ARGS)>=index ? parse(Int,ARGS[index]) : nothing
 function parse_exps(value)
     value=="all" && return EXPERIMENTS
     names=Tuple(Symbol.(split(value,',')))
@@ -44,7 +47,7 @@ end
 mode=ARGS[1]
 if mode=="design"
     length(ARGS)<=4 || error("Too many arguments")
-    names=parse_exps(get(ARGS,2,"all")); n=parse(Int,get(ARGS,3,"200")); ng=parse(Int,get(ARGS,4,"31"))
+    names=parse_exps(get(ARGS,2,"all")); n=optional_int(3); ng=optional_int(4)
     for name in names
         spec=design(name;n,ng)
         println(name,": ",length(spec.cases)," training cases per representation, ",
@@ -54,14 +57,14 @@ elseif mode in ("train","frozen")
     (mode=="train" ? 2<=length(ARGS)<=6 : 3<=length(ARGS)<=6) || error("Invalid argument count; use --help")
     include("../../utils/geometry_experiments.jl")
     if mode=="train"
-        names=parse_exps(get(ARGS,3,"all")); n=parse(Int,get(ARGS,4,"200"))
-        iters=parse(Int,get(ARGS,5,"3000")); ng=parse(Int,get(ARGS,6,"31"))
+        names=parse_exps(get(ARGS,3,"all")); n=optional_int(4)
+        iters=parse(Int,get(ARGS,5,"3000")); ng=optional_int(6)
         for name in names, rep in (:power_series,:eigenvalue)
-            cfg=GeometryExperiments.Experiments.ExperimentConfig(;representation=rep,n_per_region=n,maxiters=iters)
+            cfg=GeometryExperiments.Experiments.ExperimentConfig(;representation=rep,n_per_region=something(n,jeet_controls(name).n),maxiters=iters)
             GeometryExperiments.run_geometry(cfg,name;output_root=ARGS[2],ng)
         end
     else
-        names=parse_exps(get(ARGS,4,"all")); n=parse(Int,get(ARGS,5,"200")); ng=parse(Int,get(ARGS,6,"31"))
+        names=parse_exps(get(ARGS,4,"all")); n=optional_int(5); ng=optional_int(6)
         for name in names
             GeometryExperiments.run_frozen_geometry(ARGS[2],name;output_root=ARGS[3],n,ng)
         end

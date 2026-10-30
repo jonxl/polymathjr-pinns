@@ -1,10 +1,10 @@
 # generalization_variants.jl — Generalization experiments × representations
 
-The five diagnostic shapes from `utils/experiments.jl` (transfer, extrapolate,
-cross-region-range, showcase, gen_radius) each test a different facet of
-generalization. They were originally run sequentially per rep
-(`scripts/shared/run_all.jl`); this module threads them through the same
-per-GPU variant runner that `staged_variants.jl` uses for single-ODE training.
+The generalization runner executes representation × experiment jobs through
+the same per-GPU variant machinery that `staged_variants.jl` uses for
+single-ODE training. It supports the original shared experiments from
+`utils/experiments.jl` plus the geometry experiments from
+`utils/generalization_geometry.jl`.
 
 **Location:** `utils/generalization_variants.jl` (entry point:
 `scripts/generalization_variants.jl`)
@@ -48,8 +48,11 @@ GeneralizationSpec(name, representation;
                    n_per_region=200, maxiters=3000)
 ```
 
-`name` is the diagnostic shape: `:transfer`, `:extrapolate`, `:range`
-(cross-region-range), `:showcase`, or `:gen_radius`.
+`name` is the diagnostic shape. The shared experiments are `:transfer`,
+`:extrapolate`, `:range` (cross-region-range), `:showcase`, and
+`:gen_radius`. Geometry experiments are `:family_disks`, `:spiral_transfer`,
+`:pair_transfer`, `:parabola_segment`, `:parabola_slide`, `:parabola_curves`,
+`:parabola_bias`, `:axis_transfer`, and `:axis_sweep`.
 
 Unused fields default silently — `:showcase` ignores `regions`/`Rmax`/`Ng`
 entirely, while `:transfer` ignores `Rmax`/`Ng`.
@@ -107,9 +110,10 @@ julia --project=. -t auto scripts/generalization_variants.jl \
     --output-root results/gen-$(date +%m-%d-%y-%H%M)
 ```
 
-The default spec list runs all 5 experiments × both reps = 10 jobs. On a
-10-GPU box each job gets its own device; on a smaller box they queue
-round-robin.
+The default spec list runs the five shared experiments × both reps = 10 jobs.
+On a 10-GPU box each job gets its own device; on a smaller box they queue
+round-robin. Geometry experiments can be requested with `--experiments`, for
+example `--experiments family_disks,spiral_transfer,axis_sweep`.
 
 Output structure:
 
@@ -126,4 +130,4 @@ results/gen-{timestamp}/
 
 ---
 
-*See also: [TUI](tui.md), [Variants](variants.md), [Experiments.jl](experiments.md)*
+*See also: [TUI](tui.md), [Variants](variants.md), [Visualization Guide](../tutorials/visualization-guide.md)*

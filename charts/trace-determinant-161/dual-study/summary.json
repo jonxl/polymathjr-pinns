@@ -1,0 +1,339 @@
+{
+  "checkpoint_policy": "saved final checkpoints; no validation selection",
+  "grid_size": 161,
+  "solution_interval": [
+    0.0,
+    1.0
+  ],
+  "models": {
+    "saddle/power_series": {
+      "input_encoding": "trace_determinant",
+      "sha256": "c077d1bf7fad3f0bd3fbcfa7b03d5a9a06e36df1375cbc520fbc337e0b92913d",
+      "coarse_grid": {
+        "minimum": 0.9412748778557632,
+        "points": 6561,
+        "fraction_below_0.1": 0.0,
+        "fraction_below_0.01": 0.0,
+        "median_finite": 0.9790384603627921,
+        "maximum_finite": 1.008383751477431,
+        "failed_points": 0
+      },
+      "checkpoint": "/home/archimedes/code/polymathjr/pinns/results/dual-rep-studies/dual-representation-10m/dataset-10001-shuffle-40001-model-1235/family/saddle/power_series/model-dense-mlp-p009877.checkpoint",
+      "fine_grid": {
+        "minimum": 0.9412748778557632,
+        "points": 25921,
+        "fraction_below_0.1": 0.0,
+        "fraction_below_0.01": 0.0,
+        "median_finite": 0.9789161443235994,
+        "maximum_finite": 1.0083857816748742,
+        "failed_points": 0
+      }
+    },
+    "unstable_node/power_series": {
+      "input_encoding": "trace_determinant",
+      "sha256": "2bab8b9fd1ffa65ac7420b00508167bc18142dae3c9244ed6abcea8468c49460",
+      "coarse_grid": {
+        "minimum": 0.5943293797602526,
+        "points": 6561,
+        "fraction_below_0.1": 0.0,
+        "fraction_below_0.01": 0.0,
+        "median_finite": 0.7309940778451663,
+        "maximum_finite": 1.1080417778504492,
+        "failed_points": 0
+      },
+      "checkpoint": "/home/archimedes/code/polymathjr/pinns/results/dual-rep-studies/dual-representation-10m/dataset-10001-shuffle-40001-model-1235/family/unstable_node/power_series/model-dense-mlp-p009877.checkpoint",
+      "fine_grid": {
+        "minimum": 0.5943293797602526,
+        "points": 25921,
+        "fraction_below_0.1": 0.0,
+        "fraction_below_0.01": 0.0,
+        "median_finite": 0.730317718766573,
+        "maximum_finite": 1.1081193307868211,
+        "failed_points": 0
+      }
+    },
+    "stable_node/power_series": {
+      "input_encoding": "trace_determinant",
+      "sha256": "e2b9388a371e8faaeeec2dc2cea7fb4f9104d7fe2b134445600d9c9348b9e0ce",
+      "coarse_grid": {
+        "minimum": 0.6123191070364594,
+        "points": 6561,
+        "fraction_below_0.1": 0.0,
+        "fraction_below_0.01": 0.0,
+        "median_finite": 0.7795129708043924,
+        "maximum_finite": 1.044196525856679,
+        "failed_points": 0
+      },
+      "checkpoint": "/home/archimedes/code/polymathjr/pinns/results/dual-rep-studies/dual-representation-10m/dataset-10001-shuffle-40001-model-1235/family/stable_node/power_series/model-dense-mlp-p009877.checkpoint",
+      "fine_grid": {
+        "minimum": 0.6123172183711485,
+        "points": 25921,
+        "fraction_below_0.1": 0.0,
+        "fraction_below_0.01": 0.0,
+        "median_finite": 0.7787877922296933,
+        "maximum_finite": 1.044196525856679,
+        "failed_points": 0
+      }
+    },
+    "unstable_spiral/eigenvalue": {
+      "input_encoding": "trace_determinant",
+      "sha256": "d77d0202904b48ec7d744f6650158ad143daed06d8d8ac694e648ce852c92b94",
+      "coarse_grid": {
+        "minimum": 7.933711505098826e-5,
+        "points": 6561,
+        "fraction_below_0.1": 0.3165675964029874,
+        "fraction_below_0.01": 0.06035665294924554,
+        "median_finite": 0.1818238089035876,
+        "maximum_finite": 0.8691725907047843,
+        "failed_points": 0
+      },
+      "checkpoint": "/home/archimedes/code/polymathjr/pinns/results/dual-rep-studies/dual-representation-10m/dataset-10001-shuffle-40001-model-1235/family/unstable_spiral/eigenvalue/model-dense-mlp-p008772.checkpoint",
+      "fine_grid": {
+        "minimum": 7.438703727972827e-5,
+        "points": 25921,
+        "fraction_below_0.1": 0.31985648701824776,
+        "fraction_below_0.01": 0.06083870221056287,
+        "median_finite": 0.18003027969609572,
+        "maximum_finite": 0.8691725907047843,
+        "failed_points": 0
+      }
+    },
+    "saddle/eigenvalue": {
+      "input_encoding": "trace_determinant",
+      "sha256": "0659d7836f052a39a72754693b0ecef11b674abc48e059b62a21a19962749cb1",
+      "coarse_grid": {
+        "minimum": 2.956843879248947e-5,
+        "points": 6561,
+        "fraction_below_0.1": 0.5512879134278311,
+        "fraction_below_0.01": 0.254839201341259,
+        "median_finite": 0.061570410778074444,
+        "maximum_finite": 1.119661727322772,
+        "failed_points": 0
+      },
+      "checkpoint": "/home/archimedes/code/polymathjr/pinns/results/dual-rep-studies/dual-representation-10m/dataset-10001-shuffle-40001-model-1235/family/saddle/eigenvalue/model-dense-mlp-p008772.checkpoint",
+      "fine_grid": {
+        "minimum": 2.956843879248947e-5,
+        "points": 25921,
+        "fraction_below_0.1": 0.5540681300875738,
+        "fraction_below_0.01": 0.25797615832722504,
+        "median_finite": 0.059747950036416746,
+        "maximum_finite": 1.119661727322772,
+        "failed_points": 0
+      }
+    },
+    "center/eigenvalue": {
+      "input_encoding": "trace_determinant",
+      "sha256": "d71349a47839a3753bd22469f1484f501447f84cecbd268b0517f3841e124471",
+      "coarse_grid": {
+        "minimum": 5.002452443363522e-5,
+        "points": 6561,
+        "fraction_below_0.1": 0.4476451760402378,
+        "fraction_below_0.01": 0.03292181069958848,
+        "median_finite": 0.12676743629685763,
+        "maximum_finite": 1.107682839989696,
+        "failed_points": 0
+      },
+      "checkpoint": "/home/archimedes/code/polymathjr/pinns/results/dual-rep-studies/dual-representation-10m/dataset-10001-shuffle-40001-model-1235/family/center/eigenvalue/model-dense-mlp-p008772.checkpoint",
+      "fine_grid": {
+        "minimum": 5.002452443363522e-5,
+        "points": 25921,
+        "fraction_below_0.1": 0.4499054820415879,
+        "fraction_below_0.01": 0.03371783496007098,
+        "median_finite": 0.12539585168256281,
+        "maximum_finite": 1.107682839989696,
+        "failed_points": 0
+      }
+    },
+    "unstable_node/eigenvalue": {
+      "input_encoding": "trace_determinant",
+      "sha256": "aa1f12cd92e27df0a669bc4084f818d47a018a2a55d341524165afeb3535ac66",
+      "coarse_grid": {
+        "minimum": 0.00018385219994607183,
+        "points": 6561,
+        "fraction_below_0.1": 0.362444749276025,
+        "fraction_below_0.01": 0.03642737387593355,
+        "median_finite": 0.19017424110910086,
+        "maximum_finite": 0.915984743566385,
+        "failed_points": 0
+      },
+      "checkpoint": "/home/archimedes/code/polymathjr/pinns/results/dual-rep-studies/dual-representation-10m/dataset-10001-shuffle-40001-model-1235/family/unstable_node/eigenvalue/model-dense-mlp-p008772.checkpoint",
+      "fine_grid": {
+        "minimum": 0.00018385219994607183,
+        "points": 25921,
+        "fraction_below_0.1": 0.3643763743682728,
+        "fraction_below_0.01": 0.03846302225994368,
+        "median_finite": 0.18847913231047628,
+        "maximum_finite": 0.915984743566385,
+        "failed_points": 0
+      }
+    },
+    "global/power_series": {
+      "input_encoding": "trace_determinant",
+      "sha256": "af97f9f9dc533d36839f5af230bf3453fa2bb66b27d5b431bd6299af2fe40794",
+      "coarse_grid": {
+        "minimum": 0.9761405938319976,
+        "points": 6561,
+        "fraction_below_0.1": 0.0,
+        "fraction_below_0.01": 0.0,
+        "median_finite": 0.9879372042043887,
+        "maximum_finite": 1.0035753365296838,
+        "failed_points": 0
+      },
+      "checkpoint": "/home/archimedes/code/polymathjr/pinns/results/dual-rep-studies/dual-representation-10m/dataset-10001-shuffle-40001-model-1235/global/power_series/model-dense-mlp-p009877.checkpoint",
+      "fine_grid": {
+        "minimum": 0.9761405938319976,
+        "points": 25921,
+        "fraction_below_0.1": 0.0,
+        "fraction_below_0.01": 0.0,
+        "median_finite": 0.987888105561589,
+        "maximum_finite": 1.0035753365296838,
+        "failed_points": 0
+      }
+    },
+    "unstable_spiral/power_series": {
+      "input_encoding": "trace_determinant",
+      "sha256": "7d3d2a23ee3241aebf26194a1b69ec5aa56ddbabbc380fc5ac39be0dce076549",
+      "coarse_grid": {
+        "minimum": 0.957313181078951,
+        "points": 6561,
+        "fraction_below_0.1": 0.0,
+        "fraction_below_0.01": 0.0,
+        "median_finite": 0.9870514169280225,
+        "maximum_finite": 1.0115245959819523,
+        "failed_points": 0
+      },
+      "checkpoint": "/home/archimedes/code/polymathjr/pinns/results/dual-rep-studies/dual-representation-10m/dataset-10001-shuffle-40001-model-1235/family/unstable_spiral/power_series/model-dense-mlp-p009877.checkpoint",
+      "fine_grid": {
+        "minimum": 0.9573119441538216,
+        "points": 25921,
+        "fraction_below_0.1": 0.0,
+        "fraction_below_0.01": 0.0,
+        "median_finite": 0.9869299338379,
+        "maximum_finite": 1.0115334668224456,
+        "failed_points": 0
+      }
+    },
+    "stable_node/eigenvalue": {
+      "input_encoding": "trace_determinant",
+      "sha256": "cd652c66b9abe53368e8f9d16b13ce4e5c1a9e9ab9f367827eb4afdf30254fb1",
+      "coarse_grid": {
+        "minimum": 0.00021253839650596932,
+        "points": 6561,
+        "fraction_below_0.1": 0.29019966468526137,
+        "fraction_below_0.01": 0.032312147538484985,
+        "median_finite": 0.2359049244905205,
+        "maximum_finite": 1.2213321266955854,
+        "failed_points": 0
+      },
+      "checkpoint": "/home/archimedes/code/polymathjr/pinns/results/dual-rep-studies/dual-representation-10m/dataset-10001-shuffle-40001-model-1235/family/stable_node/eigenvalue/model-dense-mlp-p008772.checkpoint",
+      "fine_grid": {
+        "minimum": 0.00016407434182748326,
+        "points": 25921,
+        "fraction_below_0.1": 0.2910767331507272,
+        "fraction_below_0.01": 0.033524941167393234,
+        "median_finite": 0.23491467042283629,
+        "maximum_finite": 1.2213321266955854,
+        "failed_points": 0
+      }
+    },
+    "stable_spiral/power_series": {
+      "input_encoding": "trace_determinant",
+      "sha256": "b30b751fa4eac1fbaa3ecddd8db6b9ac413b4e1551e59b516985e7f225f781d4",
+      "coarse_grid": {
+        "minimum": 0.9222913281257765,
+        "points": 6561,
+        "fraction_below_0.1": 0.0,
+        "fraction_below_0.01": 0.0,
+        "median_finite": 0.9682246925193312,
+        "maximum_finite": 1.0066013082307337,
+        "failed_points": 0
+      },
+      "checkpoint": "/home/archimedes/code/polymathjr/pinns/results/dual-rep-studies/dual-representation-10m/dataset-10001-shuffle-40001-model-1235/family/stable_spiral/power_series/model-dense-mlp-p009877.checkpoint",
+      "fine_grid": {
+        "minimum": 0.9222887986610864,
+        "points": 25921,
+        "fraction_below_0.1": 0.0,
+        "fraction_below_0.01": 0.0,
+        "median_finite": 0.9680663197249406,
+        "maximum_finite": 1.0066080499289043,
+        "failed_points": 0
+      }
+    },
+    "center/power_series": {
+      "input_encoding": "trace_determinant",
+      "sha256": "c384564dde2d5d0a81411da7f1200d21bd7f1f7d7f5176973d53457871a98fc2",
+      "coarse_grid": {
+        "minimum": 0.9636975047315764,
+        "points": 6561,
+        "fraction_below_0.1": 0.0,
+        "fraction_below_0.01": 0.0,
+        "median_finite": 1.0337016386515696,
+        "maximum_finite": 1.0501094373602105,
+        "failed_points": 0
+      },
+      "checkpoint": "/home/archimedes/code/polymathjr/pinns/results/dual-rep-studies/dual-representation-10m/dataset-10001-shuffle-40001-model-1235/family/center/power_series/model-dense-mlp-p009877.checkpoint",
+      "fine_grid": {
+        "minimum": 0.9636975047315764,
+        "points": 25921,
+        "fraction_below_0.1": 0.0,
+        "fraction_below_0.01": 0.0,
+        "median_finite": 1.0338390276008818,
+        "maximum_finite": 1.0501100103290233,
+        "failed_points": 0
+      }
+    },
+    "stable_spiral/eigenvalue": {
+      "input_encoding": "trace_determinant",
+      "sha256": "ae2309d5b3ae4ffa6f291ab2523942c44d969f6d8a650513c95016b8f920d93e",
+      "coarse_grid": {
+        "minimum": 9.229449576130189e-5,
+        "points": 6561,
+        "fraction_below_0.1": 0.3789056546258192,
+        "fraction_below_0.01": 0.12863892699283647,
+        "median_finite": 0.1770495053298052,
+        "maximum_finite": 1.0898552496147857,
+        "failed_points": 0
+      },
+      "checkpoint": "/home/archimedes/code/polymathjr/pinns/results/dual-rep-studies/dual-representation-10m/dataset-10001-shuffle-40001-model-1235/family/stable_spiral/eigenvalue/model-dense-mlp-p008772.checkpoint",
+      "fine_grid": {
+        "minimum": 5.074926622748877e-5,
+        "points": 25921,
+        "fraction_below_0.1": 0.3816210794336638,
+        "fraction_below_0.01": 0.1302418888160179,
+        "median_finite": 0.17492695306024628,
+        "maximum_finite": 1.0898552496147857,
+        "failed_points": 0
+      }
+    },
+    "global/eigenvalue": {
+      "input_encoding": "trace_determinant",
+      "sha256": "0c350965d746a7d56da25ee8ebc83bb12a60b29ba88870ca2f614270873eff9f",
+      "coarse_grid": {
+        "minimum": 8.757716842749696e-6,
+        "points": 6561,
+        "fraction_below_0.1": 0.7486663618350862,
+        "fraction_below_0.01": 0.433013260173754,
+        "median_finite": 0.018199679542341994,
+        "maximum_finite": 0.6784307891279281,
+        "failed_points": 0
+      },
+      "checkpoint": "/home/archimedes/code/polymathjr/pinns/results/dual-rep-studies/dual-representation-10m/dataset-10001-shuffle-40001-model-1235/global/eigenvalue/model-dense-mlp-p008772.checkpoint",
+      "fine_grid": {
+        "minimum": 8.757716842749696e-6,
+        "points": 25921,
+        "fraction_below_0.1": 0.7524786852359091,
+        "fraction_below_0.01": 0.438486169515065,
+        "median_finite": 0.017500926466041213,
+        "maximum_finite": 0.6784821431796115,
+        "failed_points": 0
+      }
+    }
+  },
+  "solution_points": 200,
+  "map_limit": 4.0,
+  "power_series_output_basis": "taylor_derivative",
+  "initial_conditions": [
+    1.0,
+    0.0
+  ]
+}

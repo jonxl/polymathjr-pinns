@@ -35,51 +35,51 @@ function parse_commandline()
 
   @add_arg_table! s begin
     "--mode"
-      help = "Training mode: TRAIN or GRID_SEARCH"
-      arg_type = String
-      default = "TRAIN"
+    help = "Training mode: TRAIN or GRID_SEARCH"
+    arg_type = String
+    default = "TRAIN"
     "--representation"
-      help = "Solution representation: power_series (u = Σ ψₙxⁿ) or eigenvalue (u = e^{μx}[A·C(k,x)+B·S(k,x)]). eigenvalue requires 2nd-order ODEs."
-      arg_type = String
-      default = "power_series"
+    help = "Solution representation: power_series (u = Σ ψₙxⁿ/n!) or eigenvalue (u = e^{μx}[A·C(k,x)+B·S(k,x)]). eigenvalue requires 2nd-order ODEs."
+    arg_type = String
+    default = "power_series"
     "--gen-data"
-      help = "Regenerate datasets via plugboard before training"
-      action = :store_true
+    help = "Regenerate datasets via plugboard before training"
+    action = :store_true
     "--data"
-      help = "Dataset generation mode: RANDOM or SPECIFIC"
-      arg_type = String
-      default = "RANDOM"
+    help = "Dataset generation mode: RANDOM or SPECIFIC"
+    arg_type = String
+    default = "RANDOM"
     "--no-snap"
-      help = "Disable saving weight snapshots during training"
-      action = :store_true
+    help = "Disable saving weight snapshots during training"
+    action = :store_true
     "--snap-every"
-      help = "Legacy iteration checkpoint interval; mini-batch checkpoint cadence is controlled by --epochs"
-      arg_type = Int
-      default = 100
+    help = "Legacy iteration checkpoint interval; mini-batch checkpoint cadence is controlled by --epochs"
+    arg_type = Int
+    default = 100
     "--resume"
-      help = "Path to a .checkpoint (raw) or .safetensors model file for warm-start"
-      arg_type = String
-      default = nothing
+    help = "Path to a .checkpoint (raw) or .safetensors model file for warm-start"
+    arg_type = String
+    default = nothing
     "--bins"
-      help = "ODEs per bin. 0 = full batch (all ODEs per iteration)"
-      arg_type = Int
-      default = 32
+    help = "ODEs per bin. 0 = full batch (all ODEs per iteration)"
+    arg_type = Int
+    default = 32
     "--epochs"
-      help = "Save an intermediate checkpoint after every N complete epochs (mini-batch mode)"
-      arg_type = Int
-      default = 10
+    help = "Save an intermediate checkpoint after every N complete epochs (mini-batch mode)"
+    arg_type = Int
+    default = 10
     "--maxiters"
-      help = "Maximum number of training iterations (gradient updates)"
-      arg_type = Int
-      default = 10000
+    help = "Maximum number of training iterations (gradient updates)"
+    arg_type = Int
+    default = 10000
     "--train-size"
-      help = "Number of ODE examples to generate for the training dataset"
-      arg_type = Int
-      default = 1000
+    help = "Number of ODE examples to generate for the training dataset"
+    arg_type = Int
+    default = 1000
     "--grid-mode"
-      help = "Grid search execution mode: parallel (batched across threads) or sequential (one config at a time)"
-      arg_type = String
-      default = "parallel"
+    help = "Grid search execution mode: parallel (batched across threads) or sequential (one config at a time)"
+    arg_type = String
+    default = "parallel"
   end
 
   return parse_args(s)
@@ -219,7 +219,7 @@ function init_batches(batch_sizes::Array{Int})
     # set up plugboard for solutions to ay' + by = 0 where a,b != 0
     run_number_formatted = lpad(batch_index, 2, '0')
 
-    @info "Generating datasets for batch $run_number_formatted" num_examples=k mode=MODE
+    @info "Generating datasets for batch $run_number_formatted" num_examples = k mode = MODE
 
     # Training data depends on MODE
     specific_training_matrix = [-1; 1;;]
@@ -269,12 +269,12 @@ function run_training_sequence(batch_sizes::Array{Int})
 
     snap = LOAD_SNAPSHOT ? SNAPSHOT_PATH : nothing
     run_training(train_settings, MAXITERS, milestone_interval;
-                 snapshot_path=snap,
-                 batch_size=BIN_SIZE,
-                 snapshot_epoch_interval=SAVE_SNAPSHOTS ? SNAPSHOT_EVERY_N_EPOCHS : 0,
-                 neuron_count=NEURON_COUNT,
-                 seed=SEED,
-                 representation=REPRESENTATION)
+      snapshot_path=snap,
+      batch_size=BIN_SIZE,
+      snapshot_epoch_interval=SAVE_SNAPSHOTS ? SNAPSHOT_EVERY_N_EPOCHS : 0,
+      neuron_count=NEURON_COUNT,
+      seed=SEED,
+      representation=REPRESENTATION)
 
   elseif TRAINING_MODE == "GRID_SEARCH"
     # Threaded 2D grid search over pde_weight x supervised_weight
@@ -300,7 +300,7 @@ function run_training_sequence(batch_sizes::Array{Int})
       base_data_dir=output_dir,
       mode=GRID_MODE,
     )
-    @info "Grid search complete" best_objective=result.best_objective best_weights=result.best_weights
+    @info "Grid search complete" best_objective = result.best_objective best_weights = result.best_weights
 
   else
     error("Unknown TRAINING_MODE: $TRAINING_MODE. Use \"TRAIN\" or \"GRID_SEARCH\".")

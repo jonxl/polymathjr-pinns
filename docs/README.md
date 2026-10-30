@@ -1,10 +1,10 @@
 # PolyMathJr PINN Documentation
 
-Documentation for the Physics-Informed Neural Network (PINN) Power Series ODE Solver.
+Documentation for the Physics-Informed Neural Network (PINN) ODE solver and generalization study.
 
 ## Overview
 
-This project implements a PINN that learns power series coefficients to approximate solutions of Ordinary Differential Equations (ODEs). The neural network outputs coefficients that form a power series satisfying the ODE.
+This project trains PINNs to learn representations of linear ODE solutions. The main training path supports both a power-series head and a unified eigenvalue/exponential head for the trace-determinant family, with diagnostics for how representation and geometry affect generalization.
 
 ---
 
@@ -28,25 +28,26 @@ This project implements a PINN that learns power series coefficients to approxim
 - [plugboard.jl](julia-modules/plugboard.md) - Dataset generation
 - [helper_funcs.jl](julia-modules/helper-funcs.md) - Utilities
 - [training_schemes.jl](julia-modules/training-schemes.md) - Training strategies
+- [variants.jl](julia-modules/variants.md) - Staged GPU variant runner
+- [generalization_variants.jl](julia-modules/generalization-variants.md) - Representation × experiment runner
+- [tui.jl](julia-modules/tui.md) - Terminal progress boards
+- [ProgressBar.jl](julia-modules/progress-bar.md) - Progress rendering utilities
 
 ### Viz Modules
 - [Viz.jl](viz-modules/viz.md) - Dashboard module
 - [Theme.jl](viz-modules/theme.md) - Colour themes
-- [NNViewer.jl](viz-modules/nnviewer.md) - Interactive GLMakie viewer
+- [NNViewer.jl](viz-modules/nnviewer.md) - Interactive GLMakie training-run viewer
 
 ### Concepts
 - [Hyperparameter Tuning](concepts/hyperparameter-tuning.md) - Tuning strategies
 - [Training Workflow](concepts/training-workflow.md) - Complete pipeline
+- [Power-Series Loss Audit](concepts/power-series-loss-audit.md) - Coefficient conventions, factorials, residual averaging, and saved loss evidence
 
 ### Data Formats
 - [Training Dataset](data-formats/training-dataset.md) - JSON format
 - [Benchmark Dataset](data-formats/benchmark-dataset.md) - Evaluation data
 - [Output CSV](data-formats/output-csv.md) - Loss history
 - [Coefficients JSON](data-formats/coefficients-json.md) - Visualization format
-
-### API Reference
-- [Julia API](api-reference/julia-api.md) - Function signatures
-- [Python API](api-reference/python-api.md) - Class/function signatures
 
 ### Tutorials
 - [Hyperparameter Search](tutorials/hyperparameter-search.md) - Grid/binary search
@@ -61,10 +62,11 @@ This project implements a PINN that learns power series coefficients to approxim
 |-----------|------------|
 | Backend | Julia 1.9+ |
 | Neural Networks | Lux.jl |
-| Optimization | Optimization.jl (Adam, LBFGS) |
+| Optimization | Optimization.jl / OptimizationOptimisers.jl, OptimizationOptimJL.jl |
 | Autodiff | Zygote.jl |
-| Visualization | Julia 1.9+ / GLMakie.jl |
+| GPU | CUDA.jl |
+| Visualization | GLMakie.jl, Plots.jl |
 
 ---
 
-*Last updated: January 2026*
+*Last updated: September 2026*

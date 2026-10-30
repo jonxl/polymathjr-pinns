@@ -46,13 +46,13 @@ function parse_commandline()
       arg_type = Int
       default = 6
     "--Ng"
-      help = "Grid size for gen_radius"
+      help = "Grid resolution; defaults to each geometry experiment’s reference setting"
       arg_type = Int
-      default = 31
+      default = nothing
     "--n-per-region"
-      help = "ODEs per region (forwarded to Experiments.ExperimentConfig)"
+      help = "ODEs per patch/region; defaults to each geometry experiment’s reference count"
       arg_type = Int
-      default = 200
+      default = nothing
     "--maxiters"
       help = "Adam iterations per PINN (forwarded to Experiments.ExperimentConfig)"
       arg_type = Int
@@ -109,10 +109,12 @@ end
 @info "Generalization variants run" reps=reps experiments=experiments Rmax=parsed["Rmax"] Ng=parsed["Ng"] n_devices=visible_device_count()
 
 # ---- Build spec list ----
-specs = default_generalization_specs(reps=reps, experiments=experiments,
-                                     Rmax=parsed["Rmax"], Ng=parsed["Ng"],
-                                     n_per_region=parsed["n-per-region"],
-                                     maxiters=parsed["maxiters"])
+specs = [GeneralizationSpec(exp,rep;
+    Rmax=parsed["Rmax"],
+    Ng=something(parsed["Ng"], exp in GeneralizationVariants.GEOMETRY_EXPERIMENTS ?
+      GeneralizationVariants.GeometryExperiments.GeneralizationGeometry.jeet_controls(exp).ng : 31),
+    n_per_region=parsed["n-per-region"], maxiters=parsed["maxiters"])
+    for rep in reps for exp in experiments]
 
 # ---- Build jobs + run ----
 mkpath(parsed["output-root"])

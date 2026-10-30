@@ -69,6 +69,13 @@ pde_weight * num_supervised * pde + supervised_weight * supervised
 
 BC/IC loss is returned and logged, but it is not part of the optimized objective.
 
+For power series, the network predicts raw Taylor/derivative coefficients
+`ψ_n = u⁽ⁿ⁾(0)`. Coefficient MSE compares these values directly. Factorials are
+applied during reconstruction and residual evaluation through
+`u(x) = Σ ψ_n xⁿ/n!`.
+See the [power-series loss audit](../concepts/power-series-loss-audit.md) for the
+equations, history, and implications for interpreting loss.
+
 ---
 
 ### `global_loss(p_net, settings, coeff_net, st)`

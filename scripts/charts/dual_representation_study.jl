@@ -30,13 +30,17 @@ function usage()
   Generate static charts from a completed portable study bundle.
 
   Usage:
-    julia --project=. scripts/charts/dual_representation_study.jl [RESULTS_ROOT] [CHART_ROOT] [--ng N] [--map-limit L]
+    julia --project=. scripts/charts/dual_representation_study.jl [RESULTS_ROOT] [CHART_ROOT] [--ng N] [--map-limit L] [--color-scale shared|panel]
 
   Defaults:
     RESULTS_ROOT  required
     CHART_ROOT    RESULTS_ROOT/charts
     --ng          81
     --map-limit   4.0
+    --color-scale shared (use panel to reveal variation within each map)
+
+  --ng and --map-limit must match the saved evaluation grid. They do not
+  evaluate new points or increase the resolution of existing results.
   """)
 end
 
@@ -44,6 +48,7 @@ function parse_args(args)
   positional = String[]
   ng = 81
   map_limit = 4.0f0
+  color_scale = :shared
   i = 1
   while i <= length(args)
     arg = args[i]
@@ -58,6 +63,11 @@ function parse_args(args)
       i == length(args) && error("--map-limit requires a number")
       i += 1
       map_limit = parse(Float32, args[i])
+    elseif arg == "--color-scale"
+      i == length(args) && error("--color-scale requires shared or panel")
+      i += 1
+      color_scale = Symbol(args[i])
+      color_scale in (:shared, :panel) || error("--color-scale requires shared or panel")
     elseif startswith(arg, "--")
       error("Unknown option: $arg")
     else
@@ -71,7 +81,7 @@ function parse_args(args)
   length(positional) >= 1 || error("RESULTS_ROOT is required")
   results_root = positional[1]
   chart_root = length(positional) >= 2 ? positional[2] : joinpath(results_root, "charts")
-  return (; results_root, chart_root, ng, map_limit)
+  return (; results_root, chart_root, ng, map_limit, color_scale)
 end
 
 function checkpoint_dir(root, rep, region)
@@ -231,8 +241,14 @@ function write_transfer_charts(results_root, output_dir)
   save_png(fig, joinpath(output_dir, "side-by-side-transfer.png"))
 end
 
-function contour_panel(taus, deltas, errors, title, clims; colorbar=true)
+function contour_panel(taus, deltas, errors, title, clims; colorbar=true, color_scale=:shared)
   logerr = log10.(max.(errors, 1e-5))
+  lo, hi = extrema(logerr)
+  if color_scale === :panel
+    clims = lo == hi ? (lo - 0.5, hi + 0.5) : (lo, hi)
+    title *= " (local colors)"
+  end
+  title *= "\nrelative L2: $(round(minimum(errors); sigdigits=3))–$(round(maximum(errors); sigdigits=3))"
   p = heatmap(taus, deltas, logerr; c=:viridis, clims=clims,
               xlabel="τ", ylabel="Δ", title=title, colorbar=colorbar,
               colorbar_title="log10 relative L2", aspect_ratio=:equal,
@@ -243,6 +259,7 @@ function contour_panel(taus, deltas, errors, title, clims; colorbar=true)
   for (level, label, color) in zip(ERROR_CONTOUR_EXPONENTS,
                                    ERROR_CONTOUR_LABELS,
                                    ERROR_CONTOUR_COLORS)
+    lo < level < hi || continue
     contour!(p, taus, deltas, logerr; levels=[level], color=color, lw=1.8,
              colorbar_entry=false, label=false)
     # Contour series do not reliably create legend entries across backends.
@@ -269,7 +286,7 @@ function saved_error_map(entry, ng, limit)
   return Float32.(taus), Float32.(deltas), matrix
 end
 
-function write_contour_charts(results_root, output_dir, ng, limit)
+function write_contour_charts(results_root, output_dir, ng, limit; color_scale=:shared)
   suite = JSON.parsefile(joinpath(results_root, "data", "generalization-suite.json"))
   maps = Dict{Tuple{Symbol,Symbol},Matrix{Float32}}()
   axes = nothing
@@ -284,7 +301,7 @@ function write_contour_charts(results_root, output_dir, ng, limit)
   clims = (max(-5.0, minimum(all_log_errors)), min(2.0, maximum(all_log_errors)))
 
   for rep in REPRESENTATIONS
-    panels = [contour_panel(taus, deltas, maps[(rep, region)], REGION_TITLES[region], clims)
+    panels = [contour_panel(taus, deltas, maps[(rep, region)], REGION_TITLES[region], clims; color_scale)
               for region in REGIONS]
     fig = plot(panels...; layout=(2, 3), size=(1500, 950),
                plot_title="Family-trained generalization — $(replace(String(rep), "_" => " ")) | contours ε=10⁻⁴…10⁰")
@@ -294,7 +311,7 @@ function write_contour_charts(results_root, output_dir, ng, limit)
   panels = Plots.Plot[]
   for region in REGIONS, rep in REPRESENTATIONS
     push!(panels, contour_panel(taus, deltas, maps[(rep, region)],
-      "$(REGION_TITLES[region]) — $(replace(String(rep), "_" => " "))", clims))
+      "$(REGION_TITLES[region]) — $(replace(String(rep), "_" => " "))", clims; color_scale))
   end
   fig = plot(panels...; layout=(6, 2), size=(1500, 3000),
              plot_title="Family-trained generalization — representation comparison | contours ε=10⁻⁴…10⁰")
@@ -305,7 +322,7 @@ function write_contour_charts(results_root, output_dir, ng, limit)
     entry = suite["results"][String(rep)]["generalization_radius"]["global"]
     _, _, matrix = saved_error_map(entry, ng, limit)
     push!(global_panels, contour_panel(taus, deltas, matrix,
-      "Global — $(replace(String(rep), "_" => " "))", clims))
+      "Global — $(replace(String(rep), "_" => " "))", clims; color_scale))
   end
   save_png(plot(global_panels...; layout=(1, 2), size=(1400, 650),
                 plot_title="Global-model generalization"),
@@ -418,7 +435,7 @@ function main(args=ARGS)
   write_loss_charts(opts.results_root, joinpath(opts.chart_root, "training-loss"))
   write_transfer_charts(opts.results_root, joinpath(opts.chart_root, "transfer"))
   write_contour_charts(opts.results_root, joinpath(opts.chart_root, "family-generalization"),
-                       opts.ng, opts.map_limit)
+                       opts.ng, opts.map_limit; color_scale=opts.color_scale)
   write_coverage_charts(opts.results_root, joinpath(opts.chart_root, "generalization-coverage"))
   write_extrapolation_charts(opts.results_root, joinpath(opts.chart_root, "extrapolation"))
   write_range_charts(opts.results_root, joinpath(opts.chart_root, "cross-region-range"))
@@ -427,4 +444,4 @@ function main(args=ARGS)
   return nothing
 end
 
-main()
+abspath(PROGRAM_FILE) == (@__FILE__) && main()

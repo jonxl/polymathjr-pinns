@@ -22,7 +22,7 @@ center** regions depending on the roots of `r² − τr + Δ = 0`.
 
 | Representation | Network output | Solution form |
 |---|---|---|
-| **Power series** | `[ψ₀ … ψ_N]` | `u(x) = Σ ψₙ xⁿ` (monomial basis) |
+| **Power series** | `[ψ₀ … ψ_N]` | `u(x) = Σ ψₙ xⁿ/n!` (Taylor/derivative coefficients) |
 | **Eigenvalue** | `(μ, k, A, B)` | `u(x) = e^{μx}[A·C(k,x) + B·S(k,x)]` |
 
 The network trunk is identical between them; only the input/output layer widths, the loss
@@ -33,8 +33,9 @@ triple, and the solution reconstruction differ.
 - **Two solution representations**: power series and eigenvalue/exponential
 - **Multi-Loss Training**: Optimizes PDE residual and supervised losses, with boundary/initial-condition diagnostics
 - **GPU Acceleration**: Auto-detects CUDA GPUs, falls back to CPU transparently
-- **Adam + LBFGS Optimization**: Adam active; LBFGS under investigation for convergence tuning
-- **Interactive Visualization**: Native Julia + GLMakie dashboard for analyzing results
+- **Adam training and grid search**: Run normal training or threaded hyperparameter sweeps from the main entry point
+- **Checkpointing and safetensors export**: Save raw Julia checkpoints during training and convert them for portable model exchange
+- **Interactive Visualization**: Native Julia + GLMakie dashboard for training runs and shared experiment panels
 
 ## Project Structure
 
@@ -54,9 +55,14 @@ triple, and the solution reconstruction differ.
 ├── viz/
 │   ├── Viz.jl               # Dashboard module
 │   ├── Theme.jl             # Colour themes (dark/light/high-contrast)
-│   └── NNViewer.jl          # Interactive GLMakie viewer
-├── scripts/                 # Standalone generalization experiments (see below)
+│   ├── NNViewer.jl          # Interactive GLMakie training-run viewer
+│   ├── PanelSpec.jl         # JSON panel contract for experiment output
+│   ├── Panels.jl            # GLMakie renderers for shared panels
+│   └── PanelViewer.jl       # Viewer for one or more PanelSet JSON files
+├── scripts/                 # Standalone and staged experiment drivers
 ├── data/                    # Datasets and outputs
+├── results/                 # Training and staged experiment outputs
+├── test/                    # Regression tests for training, geometry, snapshots, and viewers
 └── docs/                    # Full documentation
 ```
 
@@ -94,6 +100,18 @@ scripts/
                               (+ component matrices, bars, power-series comparison)
       eig_showcase.jl         power-series vs. eig head-to-head across test types
       gen_radius.jl           generalization radius: disk radial profile + per-family maps
+      family_disks.jl         fixed-family training disks and reach maps
+      spiral_transfer.jl      spiral-family transfer in trace-determinant space
+      pair_transfer.jl        transfer between paired geometry designs
+      parabola_segment.jl     local training along a parabola segment
+      parabola_slide.jl       sliding-window parabola generalization
+      parabola_curves.jl      multiple parabola-curve comparisons
+      parabola_bias.jl        biased parabola training/test designs
+      axis_transfer.jl        transfer across orthogonal axes
+      axis_sweep.jl           axis-family sweep diagnostics
+
+  shared/                   reusable experiment harnesses, PanelSet export, and geometry studies
+  charts/                   plotting/report scripts for completed studies
 ```
 
 ## Quick Start
@@ -131,11 +149,36 @@ See [`docs/julia-modules/tui.md`](docs/julia-modules/tui.md) and
 julia --project=. -t auto scripts/generalization_variants.jl
 ```
 
-Subset by experiment with `--experiments transfer,extrapolate`. See
+Subset by experiment with `--experiments transfer,extrapolate`; geometry experiments such as
+`family_disks`, `spiral_transfer`, `pair_transfer`, `parabola_segment`, `parabola_slide`,
+`parabola_curves`, `parabola_bias`, `axis_transfer`, and `axis_sweep` are also accepted. See
 [`docs/julia-modules/generalization-variants.md`](docs/julia-modules/generalization-variants.md)
 for details.
 
 Runtime knobs (training mode, snapshots, bin size) are configurable via CLI flags — see [CLI Reference](docs/getting-started/cli-reference.md).
+
+### Matched dual-representation pretraining
+
+The large study trains power-series and eigenvalue models on the same materialized
+ODE splits and minibatches. The power-series head now uses raw `ψₙ` targets with
+`u(x) = Σ ψₙxⁿ/n!`, so start a corrected study in a new output root:
+
+```bash
+DUAL_STUDY_ROOT=results/dual-rep-studies/dual-representation-10m-taylor \
+DUAL_GPU_COUNT=8 \
+bash scripts/shared/run_portable_study.sh
+```
+
+The script trains both representations, selects checkpoints, evaluates held-out
+points, and renders the comparison charts. The direct training command is:
+
+```bash
+DUAL_STUDY_ROOT=results/dual-rep-studies/dual-representation-10m-taylor \
+julia --project=. -t 8 scripts/shared/run_all.jl
+```
+
+Use a new `DUAL_STUDY_ROOT` for the corrected run; existing dual-study bundles
+are immutable and contain checkpoints from the previous power-series convention.
 
 To run a standalone experiment instead of the main pipeline:
 
@@ -152,7 +195,7 @@ Full documentation is available in the [`docs/`](docs/README.md) directory:
 - **[Architecture](docs/architecture/overview.md)** - System design overview
 - **[Julia Modules](docs/julia-modules/pinn.md)** - Code documentation
 - **[Tutorials](docs/tutorials/hyperparameter-search.md)** - Step-by-step guides
-- **[API Reference](docs/api-reference/julia-api.md)** - Function signatures
+- **[Visualization Guide](docs/tutorials/visualization-guide.md)** - Training-run and PanelSet viewing
 
 ## How It Works
 
@@ -174,7 +217,7 @@ julia --project src/explore.jl results/run-adam-06-03-26/training_results.json r
 julia --project src/explore.jl --theme light
 ```
 
-The training dashboard shows 8 diagnostic plots (solution comparison, coefficient analysis, loss curves) with an interactive iteration range slider. Shared experiment JSON files from `scripts/shared/` open in the generic panel viewer.
+The training dashboard shows diagnostic plots for solution comparison, coefficient analysis, loss curves, and snapshot playback. Shared experiment JSON files from `scripts/shared/` and `scripts/generalization_variants.jl` open in the generic panel viewer.
 
 ## Technology Stack
 
@@ -182,7 +225,7 @@ The training dashboard shows 8 diagnostic plots (solution comparison, coefficien
 |-----------|------------|
 | Backend | Julia 1.9+ |
 | Neural Networks | Lux.jl |
-| Optimization | Optimization.jl (Adam active, LBFGS planned) |
+| Optimization | Optimization.jl / OptimizationOptimisers.jl (Adam), OptimizationOptimJL.jl |
 | Autodiff | Zygote.jl |
 | GPU | CUDA.jl (auto-detected) |
 | Visualization | Julia / GLMakie.jl (pipeline), Plots.jl (scripts) |

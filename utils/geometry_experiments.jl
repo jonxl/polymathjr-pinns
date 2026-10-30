@@ -1,8 +1,11 @@
 module GeometryExperiments
-using JSON, CUDA, SHA, Statistics
+using JSON, CUDA, SHA, Statistics, Random
 include("experiments.jl")
 using .Experiments
 using .Experiments.PanelSpec
+include("geometry_comparison.jl")
+using .GeometryComparison
+const CONTRACT_LOCK = ReentrantLock()
 include("generalization_geometry.jl")
 using .GeneralizationGeometry
 const PINN = Experiments.PINN
@@ -12,6 +15,40 @@ function write_json(path, payload)
     mkpath(dirname(path))
     open(path,"w") do io
         JSON.print(io,payload,2)
+    end
+end
+# A representation may join an experiment only with the same equations and controls.
+function ensure_contract(root, spec, cfg, nx)
+    contract=Dict("design"=>spec,"power_series_degree"=>cfg.N,
+        "network_hidden_width"=>cfg.neuron_count,"model_seed"=>cfg.seed,
+        "adam_iterations"=>cfg.maxiters,"collocation_points"=>cfg.num_points,
+        "x_left"=>cfg.x_left,"x_right"=>cfg.x_right,"solution_points"=>nx,
+        "pde_weight"=>cfg.pde_weight,"supervised_weight"=>cfg.supervised_weight,
+        "input_encoding"=>"trace_determinant","power_series_output_basis"=>"taylor_derivative",
+        "plugboard_storage_basis"=>"derivative","initial_conditions"=>[1.,0.],
+        "optimizer"=>"shared_gpu_adam")
+    normalized=JSON.parse(JSON.json(contract))
+    path=joinpath(root,"controls.json")
+    lock(CONTRACT_LOCK) do
+        if isfile(path)
+            JSON.parsefile(path)==normalized || error("Representation controls differ from $path; use identical settings or a new output root")
+        else
+            write_json(path,contract)
+        end
+    end
+    open(io->bytes2hex(sha256(io)),path)
+end
+function finish_panels(dir, spec, results, rep, digest)
+    ps=panels_for(spec,results,rep,"matched_training")
+    ps.meta["design_sha256"]=digest
+    lock(CONTRACT_LOCK) do
+        save_experiment(joinpath(dir,"panelset.json"),ps)
+        root=dirname(dir)
+        paths=[joinpath(root,String(r),"panelset.json") for r in (:power_series,:eigenvalue)]
+        if all(isfile,paths)
+            paired=paired_panels(load_experiment(paths[1]),load_experiment(paths[2]))
+            save_experiment(joinpath(root,"comparison.json"),paired)
+        end
     end
 end
 jsonpoints(points) = [Dict("tau"=>t,"delta"=>d) for (t,d) in points]
@@ -46,7 +83,7 @@ function evaluate_design(model, spec; batch_size=1024, nx=200)
     Dict(label=>score(model,points;batch_size,nx) for (label,points) in spec.probes)
 end
 function diagnostics(model, c; batch_size=1024, nx=200, tolerance=.1,
-                     reach_step=.05, reach_max=8., nangles=120)
+                     reach_step=.05, reach_max=8., nangles=120, family_shells=false)
     extra = Dict{String,Any}()
     if c.center !== nothing
         radii = collect(0.:reach_step:reach_max)
@@ -58,6 +95,23 @@ function diagnostics(model, c; batch_size=1024, nx=200, tolerance=.1,
             "radii"=>reach.reaches,"censored"=>reach.censored,
             "step"=>reach_step,"cap"=>reach_max,"tolerance"=>tolerance,
             "patch_kind"=>startswith(c.label,"center") ? "segment" : "disk")
+        if family_shells
+            # Reference family_disks: 20 shells × 600 random angles, seed reset per model.
+            radii=collect(.2:.4:8.)
+            rng=MersenneTwister(2024)
+            shell_points=Tuple{Float64,Float64}[]
+            for r in radii, _ in 1:600
+                phi=2π*rand(rng,Float32)
+                push!(shell_points,(Float64(Float32(c.center[1]+Float32(r)*cos(phi))),
+                                    Float64(Float32(c.center[2]+Float32(r)*sin(phi)))))
+            end
+            # Shell-major order is transposed to reuse the radius-major binning below.
+            points=[shell_points[(i-1)*600+j] for j in 1:600 for i in eachindex(radii)]
+            nangles=600
+            errors=predict_errors(model,points;batch_size,nx)
+            extra["shell_sampling"]=Dict("seed"=>2024,"points_per_shell"=>600,"width"=>.4,
+                "points"=>jsonpoints(points))
+        end
         # Same radial probes also show in-family/out-of-family extrapolation.
         shells = Dict{String,Any}()
         for reg in (:saddle,:stable_node,:unstable_node,:stable_spiral,:unstable_spiral,:center)
@@ -108,6 +162,28 @@ function panels_for(spec, results, rep, mode)
                 [("mean solution relative L2",max.(values,1e-12))];log_y=true))
         end
     end
+    for label in sort!(collect(keys(results)))
+        diag=get(results[label],"diagnostics",Dict())
+        if haskey(diag,"shells_by_region")
+            shells=diag["shells_by_region"]
+            series=[(reg,shells[reg]["radius"],
+                [e===nothing ? 1e6 : max(e,1e-12) for e in shells[reg]["mean_rel_l2"]])
+                for reg in sort!(collect(keys(shells))) if !isempty(shells[reg]["radius"])]
+            push!(panels,lines_panel("$(label)-shells","$label: radial extrapolation ($rep)",
+                series;xlabel="distance from patch center",ylabel="mean relative L2",log_y=true))
+        end
+    end
+    window_cases=[c for c in spec.cases if haskey(results,c.label) &&
+        haskey(get(results[c.label],"diagnostics",Dict()),"left_reach")]
+    if !isempty(window_cases)
+        centers=[sum(c.window)/2 for c in window_cases]
+        reaches(side)=[results[c.label]["diagnostics"][string(side,"_reach")]["distance"] for c in window_cases]
+        left= reaches("left"); right=reaches("right")
+        push!(panels,lines_panel("window-reach","Along-parabola reach ($rep)",
+            [("outward",centers,[c<0 ? l : r for (c,l,r) in zip(centers,left,right)]),
+             ("inward",centers,[c<0 ? r : l for (c,l,r) in zip(centers,left,right)])];
+            xlabel="training window center τ",ylabel="reach beyond window"))
+    end
     reach_labels=sort!([label for label in keys(results)
         if haskey(get(results[label],"diagnostics",Dict()),"reach")])
     if !isempty(reach_labels)
@@ -117,11 +193,11 @@ function panels_for(spec, results, rep, mode)
             ylabel="distance",log_y=false))
     end
     bias_cases=[c for c in spec.cases if haskey(results,c.label) &&
-        get(get(results[c.label],"diagnostics",Dict()),"right_minus_left_bias",nothing)!==nothing]
+        haskey(get(results[c.label],"diagnostics",Dict()),"right_minus_left_bias")]
     if !isempty(bias_cases)
         push!(panels,lines_panel("parabola-bias","Fixed-endpoint right minus left error ($rep)",
             [("bias",[sum(c.window)/2 for c in bias_cases],
-                [results[c.label]["diagnostics"]["right_minus_left_bias"] for c in bias_cases])];
+                [something(results[c.label]["diagnostics"]["right_minus_left_bias"],1e6) for c in bias_cases])];
             xlabel="training window center τ",ylabel="right minus left relative L2"))
     end
     PanelSet("$(spec.name) $rep ($mode)",Dict{String,Any}("representation"=>String(rep),
@@ -135,11 +211,12 @@ Uses the dual branch's Adam objective (PDE + supervision; IC diagnostic), not th
 legacy scripts' Adam/LBFGS floor objective. Saves convergence evidence per model.
 """
 function run_geometry(cfg::ExperimentConfig,name::Symbol; output_root="results/geometry",
-                      ng=31,ntest=400,placements=0,batch_size=1024,nx=200)
+                      ng=nothing,ntest=nothing,placements=0,batch_size=1024,nx=200)
     cfg.maxiters > 0 || error("Training iterations must be positive")
     spec=design(name;n=cfg.n_per_region,ng,ntest,placements,seed=cfg.seed)
     dir=joinpath(output_root,String(name),String(cfg.representation))
     ispath(joinpath(dir,"results.json")) && error("Results already exist: $dir")
+    digest=ensure_contract(dirname(dir),spec,cfg,nx)
     mkpath(dir)
     write_json(joinpath(dir,"design.json"),spec)
     results=Dict{String,Any}()
@@ -147,11 +224,14 @@ function run_geometry(cfg::ExperimentConfig,name::Symbol; output_root="results/g
         @info "Geometry training" experiment=name case=c.label representation=cfg.representation
         dataset=Experiments.Plugboard.generate_grid_dataset(
             first.(c.points),last.(c.points),cfg.N)
+        length(dataset)==length(c.points) || error("Plugboard collapsed duplicate equations in $(c.label)")
         r=Experiments.train_one(cfg,dataset,c.label;output_root=dir,input_encoding=:trace_determinant)
         model=device_model(r)
         probes=evaluate_design(model,spec;batch_size,nx)
         train_score=score(model,c.points;batch_size,nx)
-        extra=diagnostics(model,c;batch_size,nx)
+        extra=diagnostics(model,c;batch_size,nx,reach_step=spec.controls.reach_step,
+            reach_max=spec.controls.reach_max,nangles=spec.controls.nangles,
+            family_shells=name===:family_disks)
         if haskey(probes,"left") && haskey(probes,"right")
             l=probes["left"]["mean_rel_l2"]; rr=probes["right"]["mean_rel_l2"]
             extra["right_minus_left_bias"]=l===nothing || rr===nothing ? nothing : rr-l
@@ -162,14 +242,14 @@ function run_geometry(cfg::ExperimentConfig,name::Symbol; output_root="results/g
         write_json(joinpath(dir,"results.json"),Dict("mode"=>"matched_training",
             "config"=>cfg,"metric"=>"mean per-ODE analytic solution relative L2",
             "objective"=>"shared Adam PDE + supervised; IC diagnostic",
-            "source_commit"=>"bb2a102a","models"=>results))
+            "source_commit"=>"bb2a102a","design_sha256"=>digest,"models"=>results))
     end
-    save_experiment(joinpath(dir,"panelset.json"),panels_for(spec,results,cfg.representation,"matched_training"))
+    finish_panels(dir,spec,results,cfg.representation,digest)
     results
 end
 
 """Probe frozen validation-selected models; no claim of training on these geometries."""
-function run_frozen_geometry(root,name::Symbol;output_root,n=200,ng=31,ntest=400,
+function run_frozen_geometry(root,name::Symbol;output_root,n=nothing,ng=nothing,ntest=nothing,
                              batch_size=1024,nx=200,use_gpu=CUDA.functional())
     root=realpath(root)
     # Resolve existing ancestors before creating anything, including symlinked parents.

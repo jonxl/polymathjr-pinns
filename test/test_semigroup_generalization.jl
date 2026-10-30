@@ -1,9 +1,8 @@
 # =============================================================================
 # Test: Semigroup Generalization (the "wild ideas" experiment)
 # =============================================================================
-# The model maps ODE coefficients α to the MONOMIAL coefficients ψ_n of the
-# power-series solution u(x) = Σ ψ_n xⁿ, with y(0)=1 (so ψ_n = rⁿ/n! for the
-# exponential family).
+# The model maps ODE coefficients α to the Taylor/derivative coefficients ψ_n
+# of u(x) = Σ ψ_n xⁿ/n!, with y(0)=1 (so ψ_n = rⁿ for the exponential family).
 #
 # Held-out trio (α₀·y + α₁·y' = 0 → y = e^{-(α₀/α₁)x}):
 #   A = [2; 1]   → e^{-2x}
@@ -12,8 +11,8 @@
 #
 # The semigroup statement (internal to the model — no ground truth in it):
 #   f_Ω(x; α_A) · f_Ω(x; α_B)  ≈?  f_Ω(x; α_C)
-# In monomial basis the product is the Cauchy convolution:
-#   c_n = Σ_k  ψ^A_k · ψ^B_{n-k}
+# In derivative basis the product includes the binomial factor:
+#   ψ^C_n = Σ_k binomial(n,k) ψ^A_k · ψ^B_{n-k}
 #
 # Measurements (G-numbers):
 #   G_A, G_B, G_C — accuracy on each held-out equation vs. the true e^{rx}
@@ -55,33 +54,33 @@ end
 model_path = isempty(ARGS) ? newest_model() : ARGS[1]
 @info "Using model: $model_path"
 
-# --- Inference on the trio (network outputs monomial coefficients ψ) ---------
+# --- Inference on the trio (network outputs raw Taylor coefficients ψ) -------
 a = Float64.(load_and_infer(model_path, Float32.(A)))
 b = Float64.(load_and_infer(model_path, Float32.(B)))
 c = Float64.(load_and_infer(model_path, Float32.(C)))
 N1 = length(a)   # number of coefficients (series degree N = N1 - 1)
 
-# --- Ground truth: e^{rx} with y(0)=1 → ψ_n = rⁿ/n! ---------------------------
-truth(m) = Float64[rate(m)^n / factorial(big(n)) for n in 0:N1-1]
+# --- Ground truth: e^{rx} with y(0)=1 → ψ_n = rⁿ -------------------------------
+truth(m) = Float64[rate(m)^n for n in 0:N1-1]
 
-# --- Cauchy convolution of two monomial coefficient vectors (truncated) ------
+# --- Product of two Taylor/derivative coefficient vectors (truncated) ---------
 function cauchy_product(u::Vector{Float64}, v::Vector{Float64})
   n1 = length(u)
   w = zeros(Float64, n1)
   for n in 0:n1-1
     for k in 0:n
-      w[n+1] += u[k+1] * v[n-k+1]
+      w[n+1] += binomial(n, k) * u[k+1] * v[n-k+1]
     end
   end
   return w
 end
 
-# --- Function-space evaluation: u(x) = Σ ψₙ xⁿ on [0,1] -----------------------
+# --- Function-space evaluation: u(x) = Σ ψₙ xⁿ/n! on [0,1] -------------------
 function series_eval(d::Vector{Float64}, x::Float64)
   s, xn = 0.0, 1.0
   for n in 0:length(d)-1
     n > 0 && (xn *= x)
-    s += d[n+1] * xn
+    s += d[n+1] * xn / factorial(big(n))
   end
   return s
 end

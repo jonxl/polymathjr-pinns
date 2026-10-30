@@ -82,7 +82,7 @@ struct PINNSettings
   # Which solution representation the network learns. Determines the input/output
   # layer widths (see io_dims), which loss triple is used, and how u(x) is
   # reconstructed for evaluation and plotting.
-  #   :power_series — outputs ψ₀…ψ_N,  u(x) = Σ ψₙ xⁿ            (monomial basis)
+  #   :power_series — outputs ψ₀…ψ_N,  u(x) = Σ ψₙ xⁿ/n!        (Taylor basis)
   #   :eigenvalue   — outputs (μ,k,A,B), u(x) = e^{μx}[A·C(k,x) + B·S(k,x)]
   representation::Symbol
   # Network input encoding. `:coefficients` preserves the general flattened
@@ -129,7 +129,7 @@ Input and output layer widths implied by `settings.representation`.
 io_dims(settings::PINNSettings) = io_dims(Val(settings.representation), settings)
 
 # Power series: input is the flattened (canonicalized) ODE coefficient matrix,
-# output is one coefficient per power x⁰…x^N.
+# output is one Taylor/derivative coefficient ψ per order 0…N.
 function io_dims(::Val{:power_series}, settings::PINNSettings)
   settings.input_encoding === :trace_determinant && return (2, settings.n_terms_for_power_series + 1)
   in_width = if !isempty(settings.ode_matrices)
@@ -646,7 +646,6 @@ end
 
 function evaluate_solution(settings::PINNSettings, p_trained, coeff_net, st, benchmark_dataset, output_dir, run_id; iteration::Int=0, write_results_json::Bool=true)
   converted_benchmark_dataset = convert_plugboard_keys(benchmark_dataset)
-  fact = factorial.(big.(0:settings.n_terms_for_power_series))
   items = collect(converted_benchmark_dataset)
   buf = settings.representation === :eigenvalue ?
     precompute_batch_eig_buffers(settings, items, false, identity) :
@@ -674,8 +673,7 @@ function evaluate_solution(settings::PINNSettings, p_trained, coeff_net, st, ben
         "pinn_coefficients" => Float64.(Vector(learned)),
       )
     else
-      a_learned_derivative = Float64.(Vector(learned)) .* Float64.(fact[1:length(learned)])
-      Dict{String,Any}("pinn_coefficients" => a_learned_derivative)
+      Dict{String,Any}("pinn_coefficients" => Float64.(Vector(learned)))
     end
 
     # Write results.json — self-contained output for nn-viewer

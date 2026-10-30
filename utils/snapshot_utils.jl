@@ -49,8 +49,8 @@ function construct_solution(output::AbstractVector; representation::Symbol=:powe
            (k > 0 ? sinh(sqrt(k) * x) / sqrt(k) : sin(sqrt(-k) * x) / sqrt(-k))
     return x -> exp(mu * Float64(x)) * (A * C(Float64(x)) + B * S(Float64(x)))
   end
-  coeffs = Tuple(vals)
-  return x -> evalpoly(Float64(x), coeffs)
+  return x -> sum(vals[n+1] * Float64(x)^n / factorial(big(n))
+                  for n in 0:length(vals)-1)
 end
 
 """

@@ -39,15 +39,13 @@ log file) is much worse than a single false negative (no live board when
 one would have worked). `JULIA_TUI_OFF=1` forces the plain-text path for
 explicit overrides (e.g. `JULIA_TUI_OFF=1 julia ... > out.log`).
 
-Uses `isatty(stdout)` rather than `isinteractive()` — the latter reflects
+Uses the stream type rather than `isinteractive()` — the latter reflects
 whether Julia is running an interactive REPL prompt, which is false for a
 plain `julia script.jl` invocation even when stdout is attached to a real
-terminal. That mismatch was silently disabling the live board for the normal
-`julia --project=. -t N scripts/shared/run_all.jl` launch.
+terminal.
 """
 function is_tty()
   return isa(stdout, Base.TTY) &&
-         isatty(stdout) &&
          isempty(get(ENV, "CI", "")) &&
          isempty(get(ENV, "JULIA_TUI_OFF", ""))
 end

@@ -97,8 +97,6 @@ println("Optimal weight: ", optimal)
 
 ### Contour Plot
 
-![Grid Search Contour](../assets/grid_search_example.png)
-
 - **Darker regions:** Lower loss (better)
 - **Star marker:** Optimal point
 - **Contour lines:** Loss level sets

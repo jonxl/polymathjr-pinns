@@ -2,10 +2,31 @@
 # No ML dependencies: designs can be inspected/tested without loading CUDA.
 module GeneralizationGeometry
 using Random, Statistics
-export EXPERIMENTS, design, disk, exact_solution, point_errors, reach_summary, region
+export EXPERIMENTS, jeet_controls, design, disk, exact_solution, point_errors, reach_summary, region
 const EXPERIMENTS = (:family_disks, :spiral_transfer, :pair_transfer,
     :parabola_segment, :parabola_slide, :parabola_curves, :parabola_bias,
     :axis_transfer, :axis_sweep)
+# Dataset budgets and evaluation grids from the reference scripts at bb2a102a.
+# Supplemental plane/curve plots (absent in some references) use explicit defaults.
+function jeet_controls(name::Symbol)
+    name in EXPERIMENTS || error("Unknown geometry experiment: $name")
+    n, ng, ntest, limit = Dict(
+        :family_disks => (400,161,400,8.),
+        :spiral_transfer => (400,81,400,4.),
+        :pair_transfer => (400,91,400,4.5),
+        :parabola_segment => (300,81,400,5.5),
+        :parabola_slide => (200,81,300,4.5),
+        :parabola_curves => (80,81,800,4.5),
+        :parabola_bias => (120,81,800,4.5),
+        :axis_transfer => (300,121,400,6.),
+        :axis_sweep => (250,91,400,4.),
+    )[name]
+    (; n, ng, ntest, limit, collocation_points=50, solution_points=200,
+       seed=1234, a0=1., a1=0., x_left=0., x_right=1.,
+       shell_width=.4, shell_max=8., shell_points=600, shell_seed=2024,
+       tolerance=.1, reach_step=name===:family_disks ? .04 : .05,
+       reach_max=name===:axis_sweep ? 6. : 8., nangles=120)
+end
 const CENTERS = [:saddle => (0., -2.25), :stable_node => (-3.45, 1.05),
     :unstable_node => (3.45, 1.05), :stable_spiral => (-1.55, 2.9),
     :unstable_spiral => (1.55, 2.9), :center => (0., 2.25)]
@@ -14,11 +35,12 @@ region(t, d) = d < 0 ? :saddle : d == 0 ? :degenerate : t == 0 ? :center :
     (t < 0 ? :stable_spiral : :unstable_spiral)
 function disk(c, radius, n)
     n > 0 && radius > 0 || error("Positive point count and radius required")
-    [(c[1] + radius*sqrt((i-.5)/n)*cos(i*π*(3-sqrt(5))),
-      c[2] + radius*sqrt((i-.5)/n)*sin(i*π*(3-sqrt(5)))) for i in 1:n]
+    F=Float32; R=F(radius); cx,cy=F.(c); ga=F(π*(3-sqrt(5)))
+    [(Float64(cx+R*sqrt((F(i)-F(.5))/n)*cos(ga*i)),
+      Float64(cy+R*sqrt((F(i)-F(.5))/n)*sin(ga*i))) for i in 1:n]
 end
 patch(reg, c, radius, n) = reg === :center ?
-    [(0., d) for d in range(c[2]-radius, c[2]+radius, length=n)] : disk(c, radius, n)
+    [(0., Float64(d)) for d in range(Float32(c[2])-Float32(radius), Float32(c[2])+Float32(radius), length=n)] : disk(c, radius, n)
 parabola(a, b, n) = [(t, t*t/4) for t in range(a,b,length=n)]
 case(label, points; center=nothing, radius=nothing, window=nothing) =
     (; label=String(label), points, center, radius, window)
@@ -27,12 +49,13 @@ case(label, points; center=nothing, radius=nothing, window=nothing) =
 `n` is the point budget per patch/segment; unions contain multiple patches.
 Placement studies exclude the center ray and origin (neither has a 2-D interior).
 """
-function design(name::Symbol; n=200, ng=31, ntest=400, placements=0, seed=1234)
+function design(name::Symbol; n=nothing, ng=nothing, ntest=nothing, placements=0, seed=1234)
     name in EXPERIMENTS || error("Unknown geometry experiment: $name")
+    controls = jeet_controls(name)
+    n=something(n,controls.n); ng=something(ng,controls.ng); ntest=something(ntest,controls.ntest)
     n >= 2 && ng >= 2 && ntest >= 2 && placements >= 0 || error("Invalid geometry sizes")
     cases = NamedTuple[]; probes = Pair{String,Vector{Tuple{Float64,Float64}}}[]
-    limits = name === :family_disks ? 8. : name === :axis_sweep ? 4. :
-             name === :axis_transfer ? 6. : name === :parabola_segment ? 5.5 : 4.5
+    limits = controls.limit
     axis = collect(range(-limits, limits, length=ng))
     push!(probes, "plane" => [(t,d) for d in axis for t in axis])
     if name in (:family_disks, :spiral_transfer, :pair_transfer)
@@ -71,9 +94,10 @@ function design(name::Symbol; n=200, ng=31, ntest=400, placements=0, seed=1234)
     elseif startswith(String(name), "parabola")
         centers, width, extent = name === :parabola_segment ? ([0.],1.5,4.5) :
             name === :parabola_slide ? (vcat(-reverse(collect(.75:.75:3.75)),collect(.75:.75:3.75)),.75,4.5) :
-            name === :parabola_curves ? (collect(-3.:.75:3.),.3,20.) : (collect(-3.5:.5:3.5),.5,20.)
+            name === :parabola_curves ? (collect(-3.:.75:3.),Float64(Float32(.3)),20.) : (collect(-3.5:.5:3.5),.5,20.)
         for c in centers
-            push!(cases,case("tau-$c",parabola(c-width,c+width,n); window=(c-width,c+width)))
+            points = name===:parabola_segment ? [(Float64(t),Float64(Float32(t*t/4))) for t in range(-1.5f0,1.5f0,length=n)] : parabola(c-width,c+width,n)
+            push!(cases,case("tau-$c",points; window=(c-width,c+width)))
         end
         push!(probes,"parabola" => parabola(-extent,extent,ntest))
         push!(probes,"left" => [(-extent,extent^2/4)])
@@ -94,7 +118,12 @@ function design(name::Symbol; n=200, ng=31, ntest=400, placements=0, seed=1234)
             end
         end
     end
-    (; name, cases, probes, axis, seed, n, placements)
+    # Persist exactly the Float32 equations consumed by both networks, in order.
+    canonical(points) = [(Float64(Float32(t)),Float64(Float32(d))) for (t,d) in points]
+    cases = [merge(c,(points=canonical(c.points),)) for c in cases]
+    probes = [label=>canonical(points) for (label,points) in probes]
+    (; name, cases, probes, axis, seed, n, ng, ntest, placements,
+       controls=merge(controls,(;n,ng,ntest,seed)), source_commit="bb2a102a")
 end
 
 # Float64 analytic reference, including the repeated-root limit k=0.
@@ -115,7 +144,7 @@ function point_errors(outputs, representation, points, xs)
     for (i,(t,d)) in enumerate(points)
         o = Float64.(outputs[:,i])
         predicted = if representation === :power_series
-            [evalpoly(x,o) for x in xs]
+            [sum(o[n+1] * x^n / factorial(big(n)) for n in 0:length(o)-1) for x in xs]
         elseif representation === :eigenvalue
             mu,k,A,B = o
             [exact_solution(2mu,mu^2-k,x; A,derivative=mu*A+B) for x in xs]

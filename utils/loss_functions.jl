@@ -21,7 +21,7 @@ end
 
 # Pre-computed per-ODE constant data, device-resident (GPU or CPU).
 # Created once before the optimization loop and reused as buffers.
-struct ODEBuffers{V<:AbstractVector{Float32}, M<:AbstractMatrix{Float32}}
+struct ODEBuffers{V<:AbstractVector{Float32},M<:AbstractMatrix{Float32}}
   ode_flat_dev::V      # vec(alpha_matrix_key) on device
   bc_dev::V            # [series_coeffs[1], series_coeffs[2]] on device
   data_dev::V          # series_coeffs on device
@@ -39,25 +39,14 @@ end
 # 21! fits in Float64; 1/21! ≈ 1.95e-20 is above Float32 minimum
 const INV_FACT = Float32.(1.0 ./ factorial.(big.(0:40)))
 
-# MONOMIAL BASIS: the network outputs ψ_n, the coefficients of u(x) = Σ ψ_n xⁿ.
-# The dataset stores derivative-basis coefficients a_n = u⁽ⁿ⁾(0); they are
-# converted via ψ_n = a_n / n! at load time. ψ_n stays Float32-safe at large N
-# (|ψ_n| = |r|ⁿ/n! is bounded) where a_n = rⁿ overflows Float32 when squared.
+# The network outputs Taylor/derivative coefficients ψₙ = u⁽ⁿ⁾(0). The
+# factorial is applied when evaluating the Taylor solution:
 #
-# Reuses the precomputed INV_FACT table rather than calling factorial(big(...))
-# per coefficient: this runs once per ODE inside precompute_batch_buffers,
-# which streaming training rebuilds every iteration — recomputing BigInt
-# factorials there was the dominant GMP/GC allocation source under concurrent
-# multi-GPU load and a repeat crash site in libgmp/mpfr.
-function monomial_from_derivative(series)
-  n = length(series)
-  n <= length(INV_FACT) || error(
-    "monomial_from_derivative: series length $n exceeds precomputed INV_FACT table (max $(length(INV_FACT)))")
-  return Float32[series[i] * INV_FACT[i] for i in 1:n]
-end
-
-# d^k/dx^k xᵐ = m·(m-1)⋯(m-k+1)·x^{m-k} — the falling factorial (1 for k = 0)
-falling_factorial(m::Int, k::Int) = k == 0 ? 1.0f0 : Float32(prod(m - t for t in 0:k-1))
+#     u(x) = Σₙ ψₙ xⁿ/n!
+#
+# Keeping ψₙ as the training target is intentional: coefficient MSE compares
+# the derivatives directly. The inverse-factorial table is used only in the
+# solution and residual evaluation paths.
 
 """
     precompute_buffers(settings::PINNSettings, use_gpu::Bool, to_device_fn) → Dict{Any, ODEBuffers}
@@ -72,17 +61,17 @@ function precompute_buffers(settings, use_gpu::Bool, to_device_fn)
   P = length(xs_cpu)
   xs_dev = to_device_fn(xs_cpu)
 
-  buffers = Dict{Any, ODEBuffers}()
+  buffers = Dict{Any,ODEBuffers}()
 
   for (alpha_matrix_key, series_coeffs) in settings.ode_matrices
     # --- Device-resident input arrays (currently in loss_fn Zygote.ignore block) ---
     # Canonicalized: scalar multiples of the same ODE become one network input,
     # and the W residual no longer scales with the raw coefficient magnitude.
     ode_cpu = canonicalize_alpha(vec(alpha_matrix_key))
-    # BC targets u(0)=a₀=ψ₀ and u'(0)=a₁=ψ₁ are identical in both bases
+    # BC targets u(0)=ψ₀ and u'(0)=ψ₁ are the first Taylor terms.
     bc_cpu = Float32[series_coeffs[1], series_coeffs[2]]
-    # Supervised targets in monomial basis: ψ_n = a_n / n!
-    data_cpu = monomial_from_derivative(collect(series_coeffs))
+    # Keep raw ψ coefficients for supervised MSE.
+    data_cpu = Float32.(collect(series_coeffs))
 
     ode_flat_dev = to_device_fn(ode_cpu)
     bc_dev = to_device_fn(bc_cpu)
@@ -94,16 +83,16 @@ function precompute_buffers(settings, use_gpu::Bool, to_device_fn)
     for j in 1:P
       for i in 1:N1
         for k in 0:min(i - 1, M - 1)
-          # monomial basis: coefficient of ψ_{i-1} in u⁽ᵏ⁾ is the falling factorial
-          W_cpu[j, i] += ode_cpu[k + 1] * xs_cpu[j]^(i - 1 - k) * falling_factorial(i - 1, k)
+          # derivative basis: dᵏ[xⁿ/n!]/dxᵏ = xⁿ⁻ᵏ/(n-k)!
+          W_cpu[j, i] += ode_cpu[k+1] * xs_cpu[j]^(i - 1 - k) * INV_FACT[i-k]
         end
       end
     end
     W_dev = to_device_fn(W_cpu)
 
     # --- Power vectors (currently in generate_loss_bc_value Zygote.ignore block) ---
-    pow_u_cpu = Float32[x0^(i - 1) for i in 1:N1]
-    pow_du_cpu = Float32[i == 1 ? 0.0f0 : (i - 1) * x0^(i - 2) for i in 1:N1]
+    pow_u_cpu = Float32[x0^(i - 1) * INV_FACT[i] for i in 1:N1]
+    pow_du_cpu = Float32[i == 1 ? 0.0f0 : x0^(i - 2) * INV_FACT[i-1] for i in 1:N1]
     pow_u_dev = to_device_fn(pow_u_cpu)
     pow_du_dev = to_device_fn(pow_du_cpu)
     bc1 = bc_cpu[1]
@@ -138,7 +127,7 @@ GPU-compatible PDE loss using vectorized matrix operations.
 When `ode_buffers` is provided, uses the pre-computed W matrix directly.
 Otherwise falls back to rebuilding W inside Zygote.ignore().
 """
-function generate_loss_pde_value(settings::LossFunctionSettings; ode_buffers::Union{ODEBuffers, Nothing}=nothing)
+function generate_loss_pde_value(settings::LossFunctionSettings; ode_buffers::Union{ODEBuffers,Nothing}=nothing)
   N1 = settings.n_terms_for_power_series + 1
 
   # W is constant w.r.t. a_vec — keep entirely off the AD tape
@@ -156,8 +145,8 @@ function generate_loss_pde_value(settings::LossFunctionSettings; ode_buffers::Un
       for j in 1:P
         for i in 1:N1
           for k in 0:min(i - 1, M - 1)
-            # monomial basis — must match precompute_buffers
-            W_cpu[j, i] += ode_cpu[k + 1] * xs_cpu[j]^(i - 1 - k) * falling_factorial(i - 1, k)
+            # derivative basis — must match precompute_buffers
+            W_cpu[j, i] += ode_cpu[k+1] * xs_cpu[j]^(i - 1 - k) * INV_FACT[i-k]
           end
         end
       end
@@ -180,7 +169,7 @@ GPU-compatible boundary condition loss.
 When `ode_buffers` is provided, uses pre-computed power vectors and BC scalars.
 Otherwise falls back to rebuilding inside Zygote.ignore().
 """
-function generate_loss_bc_value(settings::LossFunctionSettings; ode_buffers::Union{ODEBuffers, Nothing}=nothing)
+function generate_loss_bc_value(settings::LossFunctionSettings; ode_buffers::Union{ODEBuffers,Nothing}=nothing)
   N1 = settings.n_terms_for_power_series + 1
   x0 = settings.x_left
 
@@ -189,9 +178,9 @@ function generate_loss_bc_value(settings::LossFunctionSettings; ode_buffers::Uni
     if ode_buffers !== nothing
       (ode_buffers.pow_u, ode_buffers.pow_du, ode_buffers.bc1, ode_buffers.bc2)
     else
-      # Fallback: rebuild (used by evaluate_solution / CPU path) — monomial basis
-      pow_u_cpu = Float32[x0^(i - 1) for i in 1:N1]
-      pow_du_cpu = Float32[i == 1 ? 0.0f0 : (i - 1) * x0^(i - 2) for i in 1:N1]
+      # Fallback: rebuild (used by evaluate_solution / CPU path) — derivative basis
+      pow_u_cpu = Float32[x0^(i - 1) * INV_FACT[i] for i in 1:N1]
+      pow_du_cpu = Float32[i == 1 ? 0.0f0 : x0^(i - 2) * INV_FACT[i-1] for i in 1:N1]
 
       pu = similar(settings.a_vec)
       copyto!(pu, pow_u_cpu)
@@ -220,7 +209,7 @@ GPU-compatible supervised loss.
 When `ode_buffers` is provided, uses pre-computed padded data and mask.
 Otherwise falls back to rebuilding inside Zygote.ignore().
 """
-function generate_loss_supervised_value(settings::LossFunctionSettings; ode_buffers::Union{ODEBuffers, Nothing}=nothing)
+function generate_loss_supervised_value(settings::LossFunctionSettings; ode_buffers::Union{ODEBuffers,Nothing}=nothing)
   K = settings.num_supervised
   N1 = length(settings.a_vec)
 
@@ -230,9 +219,8 @@ function generate_loss_supervised_value(settings::LossFunctionSettings; ode_buff
       (ode_buffers.padded_data, ode_buffers.mask)
     else
       # Fallback: rebuild (used by evaluate_solution / CPU path).
-      # settings.data carries RAW derivative-basis series — convert to ψ here,
-      # mirroring the conversion precompute_buffers applies to padded_data.
-      d_cpu = monomial_from_derivative(collect(settings.data))
+      # settings.data carries the raw ψ series.
+      d_cpu = Float32.(collect(settings.data))
       pd_cpu = zeros(Float32, N1)
       m_cpu = zeros(Float32, N1)
       pd_cpu[1:min(K, length(d_cpu))] .= d_cpu[1:min(K, length(d_cpu))]
@@ -266,24 +254,24 @@ end
 #
 #     resid[:, b] = Σ_k α_k[b] · (D_k · A[:, b])
 #
-# where D_k[j, i] = d^k/dx^k x^{i-1} evaluated at x_j — the monomial derivative
-# matrix for order k, identical for every ODE. Now a whole bin is one network
+# where D_k[j, i] = x_j^{i-1-k}/(i-1-k)! for the derivative-basis output.
+# It is identical for every ODE. Now a whole bin is one network
 # call producing A (N1 × nb) and M matmuls of (P × N1)·(N1 × nb).
 #
-# This is mathematically identical to the per-ODE form (same falling-factorial
+# This is mathematically identical to the per-ODE form (same Taylor-basis
 # rule, same canonicalized α) and it also uses far less memory: M shared
 # matrices instead of one P×N1 matrix per ODE.
 
 # Device-resident constants for a whole bin of ODEs under the power-series
 # representation. Built once per bin; the per-order D matrices are shared.
-struct BatchBuffers{V<:AbstractVector{Float32}, M<:AbstractMatrix{Float32}}
+struct BatchBuffers{V<:AbstractVector{Float32},M<:AbstractMatrix{Float32}}
   X::M            # (in_width × nb) network inputs — canonicalized α, one column per ODE
   ALPHA::M        # (M_orders × nb) canonicalized α coefficients per ODE
-  D::Vector{M}    # M_orders matrices, each (P × N1): order-k monomial derivatives
+  D::Vector{M}    # M_orders matrices, each (P × N1): order-k Taylor derivatives
   pow_u::V        # (N1,) evaluates u(x_left)
   pow_du::V       # (N1,) evaluates u'(x_left)
   BC::M           # (2 × nb) [a₀; a₁] targets per ODE
-  DATA::M         # (N1 × nb) supervised targets ψ, zero-padded
+  DATA::M         # (N1 × nb) raw ψ targets, zero-padded
   MASK::M         # (N1 × nb) 1 on supervised entries, 0 elsewhere
   num_points::Int # P — collocation point count
   num_supervised::Int
@@ -341,28 +329,28 @@ function precompute_batch_buffers(settings, items, use_gpu::Bool, to_device_fn)
     ALPHA_cpu[1:length(a), b] .= a
     BC_cpu[1, b] = Float32(series[1])
     BC_cpu[2, b] = Float32(series[2])
-    # Supervised targets in the monomial basis: ψ_n = a_n / n!
-    psi = monomial_from_derivative(collect(series))
-    ncopy = min(K, length(psi), N1)
-    DATA_cpu[1:ncopy, b] .= psi[1:ncopy]
+    # Keep raw ψ coefficients for supervised MSE.
+    data = Float32.(collect(series))
+    ncopy = min(K, length(data), N1)
+    DATA_cpu[1:ncopy, b] .= data[1:ncopy]
     MASK_cpu[1:min(K, N1), b] .= 1.0f0
   end
 
-  # Shared order-k monomial derivative matrices:
-  #   D_k[j, i] = falling_factorial(i-1, k) * x_j^{i-1-k}
+  # Shared derivative-basis matrices:
+  #   D_k[j, i] = x_j^{i-1-k} / (i-1-k)!
   D_dev = Vector{typeof(to_device_fn(zeros(Float32, P, N1)))}()
-  for k in 0:(M_orders - 1)
+  for k in 0:(M_orders-1)
     Dk = zeros(Float32, P, N1)
     for j in 1:P, i in 1:N1
       if (i - 1) >= k
-        Dk[j, i] = falling_factorial(i - 1, k) * xs_cpu[j]^(i - 1 - k)
+        Dk[j, i] = INV_FACT[i-k] * xs_cpu[j]^(i - 1 - k)
       end
     end
     push!(D_dev, to_device_fn(Dk))
   end
 
-  pow_u_cpu = Float32[x0^(i - 1) for i in 1:N1]
-  pow_du_cpu = Float32[i == 1 ? 0.0f0 : (i - 1) * x0^(i - 2) for i in 1:N1]
+  pow_u_cpu = Float32[x0^(i - 1) * INV_FACT[i] for i in 1:N1]
+  pow_du_cpu = Float32[i == 1 ? 0.0f0 : x0^(i - 2) * INV_FACT[i-1] for i in 1:N1]
 
   return BatchBuffers(
     to_device_fn(X_cpu), to_device_fn(ALPHA_cpu), D_dev,
@@ -398,7 +386,7 @@ end
     batched_power_series_losses(A, buf::BatchBuffers) → (pde, bc, sup)
 
 The three loss components for a whole bin at once. `A` is the network output,
-`(N1 × nb)` — one column of monomial coefficients ψ per ODE.
+`(N1 × nb)` — one column of raw ψ coefficients per ODE.
 
 Every operation is a matmul or a broadcast over full arrays: no scalar
 indexing, so this differentiates correctly under Zygote on CPU and GPU alike.
@@ -417,7 +405,7 @@ function batched_power_series_losses(A::AbstractMatrix, buf::BatchBuffers)
   loss_bc = (sum(abs2, u_row .- transpose(view(buf.BC, 1, :))) +
              sum(abs2, du_row .- transpose(view(buf.BC, 2, :)))) / buf.nb
 
-  # Supervised: masked MSE against the ψ targets.
+  # Supervised: masked MSE against the raw ψ targets.
   loss_sup = sum(abs2, (A .- buf.DATA) .* buf.MASK) / (buf.num_supervised * buf.nb)
 
   return (loss_pde, loss_bc, loss_sup)
@@ -474,7 +462,7 @@ const CS_COEFF_S_TUPLE = Tuple(CS_COEFF_S)
 @inline _s_series_value(z) = evalpoly(z, CS_COEFF_S_TUPLE)
 
 # Device-resident constants for one ODE under the eigenvalue representation.
-struct EigBuffers{V<:AbstractVector{Float32}, M<:AbstractMatrix{Float32}}
+struct EigBuffers{V<:AbstractVector{Float32},M<:AbstractMatrix{Float32}}
   input_dev::V     # [τ, Δ] — the network input
   XE::M            # (P × PTERM+1) even powers  x^{2n}
   XO::M            # (P × PTERM+1) odd  powers  x^{2n+1}
@@ -535,14 +523,14 @@ function precompute_eig_buffers(settings, use_gpu::Bool, to_device_fn)
   P = length(xs_cpu)
 
   # Even/odd power matrices are shared by every ODE — build once.
-  XE_cpu = Float32[xs_cpu[m]^(2n)     for m in 1:P, n in 0:PTERM]
+  XE_cpu = Float32[xs_cpu[m]^(2n) for m in 1:P, n in 0:PTERM]
   XO_cpu = Float32[xs_cpu[m]^(2n + 1) for m in 1:P, n in 0:PTERM]
   XE = to_device_fn(XE_cpu)
   XO = to_device_fn(XO_cpu)
   cC = to_device_fn(CS_COEFF_C)
   cS = to_device_fn(CS_COEFF_S)
 
-  buffers = Dict{Any, EigBuffers}()
+  buffers = Dict{Any,EigBuffers}()
   for (alpha_matrix_key, series_coeffs) in settings.ode_matrices
     tau, delta = tau_delta_from_alpha(vec(alpha_matrix_key))
     # ICs are basis-independent: u(0)=a₀ and u'(0)=a₁ in every representation.
@@ -622,7 +610,7 @@ end
 #
 # This contains no generic power operation in the differentiated GPU path.
 
-struct BatchEigBuffers{V<:AbstractVector{Float32}, M<:AbstractMatrix{Float32}}
+struct BatchEigBuffers{V<:AbstractVector{Float32},M<:AbstractMatrix{Float32}}
   X::M            # (2 × nb) network inputs [τ; Δ]
   TAU::M          # (1 × nb)
   DELTA::M        # (1 × nb)
@@ -660,13 +648,16 @@ function precompute_batch_eig_buffers(settings, items, use_gpu::Bool, to_device_
     tau, delta = tau_delta_from_alpha(vec(key))
     a0 = Float32(series[1])
     a1 = Float32(series[2])
-    X_cpu[1, b] = tau; X_cpu[2, b] = delta
-    TAU_cpu[1, b] = tau; DELTA_cpu[1, b] = delta
-    A0_cpu[1, b] = a0;  A1_cpu[1, b] = a1
+    X_cpu[1, b] = tau
+    X_cpu[2, b] = delta
+    TAU_cpu[1, b] = tau
+    DELTA_cpu[1, b] = delta
+    A0_cpu[1, b] = a0
+    A1_cpu[1, b] = a1
     UTRUE_cpu[:, b] .= eig_true_solution(tau, delta, a0, a1, xs_cpu)
   end
 
-  XE_cpu = Float32[xs_cpu[m]^(2n)     for m in 1:P, n in 0:PTERM]
+  XE_cpu = Float32[xs_cpu[m]^(2n) for m in 1:P, n in 0:PTERM]
   XO_cpu = Float32[xs_cpu[m]^(2n + 1) for m in 1:P, n in 0:PTERM]
 
   return BatchEigBuffers(
@@ -684,18 +675,20 @@ end
 The solution values at the collocation points, for a whole bin.
 
 This is what makes the two representations comparable: coefficient-space error
-is not directly comparable across them (N+1 monomial coefficients vs 4
+is not directly comparable across them (N+1 Taylor coefficients vs 4
 unified-form parameters), but solution-space error is basis-independent.
 Every cross-region and sweep metric is computed from this.
 
-For the power-series form `D[1]` is the order-0 derivative matrix, i.e. plain
-monomial evaluation x^{i-1}, so `u = D[1] · A` exactly.
+For the power-series form `D[1]` is the order-0 Taylor matrix,
+`D[1][j, i] = x_j^(i-1)/(i-1)!`.
 """
 batched_reconstruct(A::AbstractMatrix, buf::BatchBuffers) = buf.D[1] * A
 
 function batched_reconstruct(O::AbstractMatrix, buf::BatchEigBuffers)
-  mu = view(O, 1:1, :); k = view(O, 2:2, :)
-  A = view(O, 3:3, :);  B = view(O, 4:4, :)
+  mu = view(O, 1:1, :)
+  k = view(O, 2:2, :)
+  A = view(O, 3:3, :)
+  B = view(O, 4:4, :)
   x = reshape(buf.xs, :, 1)
   z = k .* x .* x
   C = _c_series_value.(z)
@@ -708,8 +701,8 @@ end
 
 Ground-truth solution values for a bin, so the relative-L2 metric has a
 reference. The eigenvalue buffers carry these analytically; the power-series
-buffers carry supervised ψ targets, from which the solution is the same
-monomial evaluation applied to the targets rather than the prediction.
+buffers carry raw ψ targets, from which the Taylor solution is
+reconstructed rather than the prediction.
 """
 true_solutions(buf::BatchEigBuffers) = buf.UTRUE
 true_solutions(buf::BatchBuffers) = buf.D[1] * buf.DATA
@@ -747,8 +740,10 @@ The three loss components for a whole bin. `O` is the network output,
 `(4 × nb)` — rows are (μ, k, A, B).
 """
 function batched_eigenvalue_losses(O::AbstractMatrix, buf::BatchEigBuffers)
-  mu = view(O, 1:1, :); k = view(O, 2:2, :)
-  A = view(O, 3:3, :);  B = view(O, 4:4, :)
+  mu = view(O, 1:1, :)
+  k = view(O, 2:2, :)
+  A = view(O, 3:3, :)
+  B = view(O, 4:4, :)
 
   # These arrays define the fixed ODE batch and analytic basis. Gradients are
   # required only with respect to O (and therefore the network parameters).
@@ -795,14 +790,14 @@ function eig_reconstruct(out::AbstractVector, buf::EigBuffers)
 end
 
 # Keep scalar versions for evaluation/plotting (CPU only, not used in training gradient path)
-# a_vec holds monomial coefficients ψ: u(x) = Σ ψ_{i-1} x^{i-1}
+# a_vec holds derivative coefficients: u(x) = Σ a_{i-1} x^{i-1}/(i-1)!
 function ode_residual(settings::LossFunctionSettings, x)
   return sum(
     settings.ode_matrix_flat[order+1] * (
       order == 0 ?
       sum(settings.a_vec[i] * x^(i - 1) for i in 1:settings.n_terms_for_power_series+1) :
       sum(
-        settings.a_vec[i] * falling_factorial(i - 1, order) * x^(i - 1 - order)
+        settings.a_vec[i] * INV_FACT[i-order] * x^(i - 1 - order)
         for i in (order+1):(settings.n_terms_for_power_series+1)
       )
     )
@@ -811,11 +806,12 @@ function ode_residual(settings::LossFunctionSettings, x)
 end
 
 function generate_u_approx(settings::LossFunctionSettings)
-  u_approx(x) = sum(settings.a_vec[i] * x^(i - 1) for i in 1:(settings.n_terms_for_power_series+1))
+  u_approx(x) = sum(settings.a_vec[i] * x^(i - 1) * INV_FACT[i]
+                    for i in 1:(settings.n_terms_for_power_series+1))
   return u_approx
 end
 
-export LossFunctionSettings, ODEBuffers, precompute_buffers, generate_loss_pde_value, generate_loss_bc_value, generate_loss_supervised_value, ode_residual, generate_u_approx, monomial_from_derivative, falling_factorial
+export LossFunctionSettings, ODEBuffers, precompute_buffers, generate_loss_pde_value, generate_loss_bc_value, generate_loss_supervised_value, ode_residual, generate_u_approx
 export BatchBuffers, precompute_batch_buffers, batched_power_series_losses
 export BatchEigBuffers, precompute_batch_eig_buffers, batched_eigenvalue_losses
 export select_bin, batched_reconstruct, true_solutions, relative_l2

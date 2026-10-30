@@ -229,6 +229,7 @@ function draw_grouped_bar!(pos, panel::Panel; theme = nothing)
   end
 
   nser > 1 && axislegend(ax; position = :rt, framevisible = false)
+  haskey(panel.opts,"ylims") && ylims!(ax,Float64.(panel.opts["ylims"])...)
   return ax
 end
 
@@ -265,6 +266,7 @@ function draw_lines!(pos, panel::Panel; theme = nothing)
   end
 
   length(series) > 1 && axislegend(ax; position = :rt, framevisible = false)
+  haskey(panel.opts,"ylims") && ylims!(ax,Float64.(panel.opts["ylims"])...)
   return ax
 end
 

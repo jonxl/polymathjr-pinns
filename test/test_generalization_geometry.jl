@@ -21,7 +21,7 @@ using .GeneralizationGeometry
         @test all(p->region(p...)==reg,c.points)
     end
     for name in (:parabola_segment,:parabola_slide,:parabola_curves,:parabola_bias)
-        @test all(p->p[2]==p[1]^2/4,reduce(vcat,[c.points for c in design(name).cases]))
+        @test all(p->isapprox(p[2],p[1]^2/4;atol=1e-6),reduce(vcat,[c.points for c in design(name).cases]))
     end
     @test_throws ErrorException design(:bogus)
     @test_throws ErrorException design(:axis_transfer;n=0)
@@ -46,4 +46,28 @@ end
     @test r.reaches==[.2,.3,0.]
     @test r.censored==[false,true,false]
     @test r.margin≈.1
+end
+
+@testset "Jeet dataset controls" begin
+    budgets=[400,400,400,300,200,80,120,300,250]
+    grids=[161,81,91,81,81,81,81,121,91]
+    case_counts=[7,1,2,1,10,9,15,2,18]
+    multipliers=[1,2,2,1,1,1,1,5,1]
+    for (name,n,ng,ncases,multiple) in zip(EXPERIMENTS,budgets,grids,case_counts,multipliers)
+        spec=design(name)
+        @test spec.n==n
+        @test spec.ng==ng
+        @test length(spec.cases)==ncases
+        @test all(c->length(c.points)==n*multiple,spec.cases)
+        @test all(c->length(unique(c.points))==length(c.points),spec.cases)
+        @test all(c->all(p->all(x->Float64(Float32(x))==x,p),c.points),spec.cases)
+    end
+    @test design(:parabola_slide).ntest==300
+    @test design(:parabola_curves).ntest==800
+    @test extrema(design(:spiral_transfer).axis)==(-4.,4.)
+    # Independent reference sunflower calculation, including Float32 rounding.
+    c=(-1.55f0,2.9f0); R=.3f0; n=400; ga=Float32(π*(3-sqrt(5)))
+    reference=[(Float64(c[1]+R*sqrt((Float32(i)-.5f0)/n)*cos(ga*i)),
+                Float64(c[2]+R*sqrt((Float32(i)-.5f0)/n)*sin(ga*i))) for i in 1:n]
+    @test disk(c,R,n)==reference
 end
