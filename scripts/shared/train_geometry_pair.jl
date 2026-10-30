@@ -9,7 +9,7 @@ root, name, iterations = ARGS[1], Symbol(ARGS[2]), parse(Int, ARGS[3])
 name in GG.EXPERIMENTS || error("Unknown experiment: $name")
 iterations > 0 || error("Iterations must be positive")
 for rep in (:power_series, :eigenvalue)
-    cfg = GE.Experiments.ExperimentConfig(; representation=rep,
+    cfg = GE.Experiments.ExperimentConfig(; representation=rep, N=20,
         n_per_region=GG.jeet_controls(name).n, maxiters=iterations)
     dir = joinpath(root, String(name), String(rep))
     if isfile(joinpath(dir, "panelset.json")) && isfile(joinpath(dir, "results.json"))

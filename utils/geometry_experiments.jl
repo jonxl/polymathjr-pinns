@@ -8,6 +8,8 @@ using .GeometryComparison
 const CONTRACT_LOCK = ReentrantLock()
 include("generalization_geometry.jl")
 using .GeneralizationGeometry
+include("geometry_panels.jl")
+using .GeometryPanels
 const PINN = Experiments.PINN
 export run_geometry, run_frozen_geometry
 
@@ -41,6 +43,10 @@ end
 function finish_panels(dir, spec, results, rep, digest)
     ps=panels_for(spec,results,rep,"matched_training")
     ps.meta["design_sha256"]=digest
+    controls=JSON.parsefile(joinpath(dirname(dir),"controls.json"))
+    ps.meta["training_controls"]=Dict(k=>controls[k] for k in
+        ("power_series_degree","adam_iterations","network_hidden_width","model_seed",
+         "collocation_points","solution_points","x_left","x_right","optimizer"))
     lock(CONTRACT_LOCK) do
         save_experiment(joinpath(dir,"panelset.json"),ps)
         root=dirname(dir)
@@ -137,74 +143,6 @@ function diagnostics(model, c; batch_size=1024, nx=200, tolerance=.1,
     end
     extra
 end
-function panels_for(spec, results, rep, mode)
-    panels=Panel[]
-    for label in sort!(collect(keys(results)))
-        scores=results[label]["probes"]
-        plane=scores["plane"]
-        # Raw JSON carries null plus failed_points; plots use a finite failure cap.
-        es=[e === nothing ? 1e6 : e for e in plane["errors"]]
-        push!(panels,heatmap_panel("$(label)-plane","$label ($rep)",
-            permutedims(reshape(es,length(spec.axis),length(spec.axis))),
-            string.(spec.axis),string.(spec.axis); xlabel="τ",ylabel="Δ",
-            annotate=false,x_values=spec.axis,y_values=spec.axis,contour_levels=[.1],floor_val=1e-6))
-        if haskey(scores,"parabola")
-            s=scores["parabola"]
-            push!(panels,lines_panel("$(label)-parabola","$label: along parabola",
-                [("solution relative L2",[p["tau"] for p in s["points"]],
-                  [e === nothing ? 1e6 : max(e,1e-12) for e in s["errors"]])];
-                xlabel="τ",ylabel="relative L2",log_y=true))
-        end
-        labels=sort!([k for k in keys(scores) if k ∉ ("plane","parabola")])
-        if !isempty(labels)
-            values=[something(scores[k]["mean_rel_l2"],1e6) for k in labels]
-            push!(panels,grouped_bar_panel("$(label)-transfer","$label: probe errors",labels,
-                [("mean solution relative L2",max.(values,1e-12))];log_y=true))
-        end
-    end
-    for label in sort!(collect(keys(results)))
-        diag=get(results[label],"diagnostics",Dict())
-        if haskey(diag,"shells_by_region")
-            shells=diag["shells_by_region"]
-            series=[(reg,shells[reg]["radius"],
-                [e===nothing ? 1e6 : max(e,1e-12) for e in shells[reg]["mean_rel_l2"]])
-                for reg in sort!(collect(keys(shells))) if !isempty(shells[reg]["radius"])]
-            push!(panels,lines_panel("$(label)-shells","$label: radial extrapolation ($rep)",
-                series;xlabel="distance from patch center",ylabel="mean relative L2",log_y=true))
-        end
-    end
-    window_cases=[c for c in spec.cases if haskey(results,c.label) &&
-        haskey(get(results[c.label],"diagnostics",Dict()),"left_reach")]
-    if !isempty(window_cases)
-        centers=[sum(c.window)/2 for c in window_cases]
-        reaches(side)=[results[c.label]["diagnostics"][string(side,"_reach")]["distance"] for c in window_cases]
-        left= reaches("left"); right=reaches("right")
-        push!(panels,lines_panel("window-reach","Along-parabola reach ($rep)",
-            [("outward",centers,[c<0 ? l : r for (c,l,r) in zip(centers,left,right)]),
-             ("inward",centers,[c<0 ? r : l for (c,l,r) in zip(centers,left,right)])];
-            xlabel="training window center τ",ylabel="reach beyond window"))
-    end
-    reach_labels=sort!([label for label in keys(results)
-        if haskey(get(results[label],"diagnostics",Dict()),"reach")])
-    if !isempty(reach_labels)
-        push!(panels,grouped_bar_panel("reach-margins","Median reach beyond patch edge ($rep)",
-            reach_labels,[("reach minus patch radius",
-                [results[label]["diagnostics"]["reach"]["margin"] for label in reach_labels])];
-            ylabel="distance",log_y=false))
-    end
-    bias_cases=[c for c in spec.cases if haskey(results,c.label) &&
-        haskey(get(results[c.label],"diagnostics",Dict()),"right_minus_left_bias")]
-    if !isempty(bias_cases)
-        push!(panels,lines_panel("parabola-bias","Fixed-endpoint right minus left error ($rep)",
-            [("bias",[sum(c.window)/2 for c in bias_cases],
-                [something(results[c.label]["diagnostics"]["right_minus_left_bias"],1e6) for c in bias_cases])];
-            xlabel="training window center τ",ylabel="right minus left relative L2"))
-    end
-    PanelSet("$(spec.name) $rep ($mode)",Dict{String,Any}("representation"=>String(rep),
-        "experiment"=>String(spec.name),"mode"=>mode,"source_commit"=>"bb2a102a",
-        "truth"=>"Float64 analytic solution; y(0)=1, y'(0)=0",
-        "plot_nonfinite_cap"=>1e6),panels)
-end
 
 """Train each geometry with the shared GPU trainer, identical inputs/seeds for both heads.
 Uses the dual branch's Adam objective (PDE + supervision; IC diagnostic), not the
@@ -232,6 +170,13 @@ function run_geometry(cfg::ExperimentConfig,name::Symbol; output_root="results/g
         extra=diagnostics(model,c;batch_size,nx,reach_step=spec.controls.reach_step,
             reach_max=spec.controls.reach_max,nangles=spec.controls.nangles,
             family_shells=name===:family_disks)
+        if name === :family_disks && c.center !== nothing
+            tau_axis = collect(range(c.center[1]-1., c.center[1]+1., length=201))
+            delta_axis = collect(range(c.center[2]-1., c.center[2]+1., length=201))
+            local_points = [(t,d) for d in delta_axis for t in tau_axis]
+            extra["local_plane"] = Dict("tau_axis"=>tau_axis,"delta_axis"=>delta_axis,
+                "score"=>score(model,local_points;batch_size,nx))
+        end
         if haskey(probes,"left") && haskey(probes,"right")
             l=probes["left"]["mean_rel_l2"]; rr=probes["right"]["mean_rel_l2"]
             extra["right_minus_left_bias"]=l===nothing || rr===nothing ? nothing : rr-l

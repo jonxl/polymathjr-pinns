@@ -4,6 +4,7 @@ import importlib.util
 from pathlib import Path
 import tempfile
 import unittest
+from unittest.mock import patch
 import sys
 
 sys.dont_write_bytecode = True
@@ -25,6 +26,29 @@ def sets():
 
 
 class StudyExportTests(unittest.TestCase):
+    def test_disk_overlay_and_radial_guides_are_rendered(self):
+        p = {"id": "saddle-plane", "title": "Saddle", "kind": "heatmap", "xlabel": "τ", "ylabel": "Δ",
+             "opts": {"log_color": True, "floor_val": 1e-6, "contour_levels": [.1]},
+             "data": {"matrix": [[.01,.2],[.02,.3]], "x_values": [-1.,1.], "y_values": [-1.,1.],
+                      "training_patch": {"kind": "disk", "center": [0.,0.], "radius": .3, "points": [[0.,0.],[.1,.1]]}}}
+        with tempfile.TemporaryDirectory() as directory:
+            with patch.object(exporter.plt, "close") as close:
+                exporter.render_pair((p, copy.deepcopy(p)), Path(directory)/"disk")
+                fig = close.call_args.args[0]
+                self.assertEqual([circle.get_radius() for circle in fig.axes[0].patches], [.3])
+                self.assertIn("training equations", fig.axes[0].get_legend_handles_labels()[1])
+            exporter.plt.close(fig)
+            curve = panel("shells")
+            curve["opts"] = {"log_y": True, "horizontal_lines": [{"value": .1,"label": "tolerance"}],
+                             "vertical_lines": [{"value": .3,"label": "patch edge"}]}
+            with patch.object(exporter.plt, "close") as close:
+                exporter.render_pair((curve, copy.deepcopy(curve)), Path(directory)/"shells")
+                fig = close.call_args.args[0]
+                self.assertIn("tolerance", fig.axes[0].get_legend_handles_labels()[1])
+                self.assertIn("patch edge", fig.axes[0].get_legend_handles_labels()[1])
+                self.assertLess(fig.axes[0].get_ylim()[0], .1)
+            exporter.plt.close(fig)
+
     def test_paired_layout_always_places_power_series_first(self):
         row = exporter.paired_figure_row("model", "Model", {
             "eigenvalue": "<figure>EV result</figure>",

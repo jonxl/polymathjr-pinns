@@ -31,7 +31,7 @@ const sections = [
 const buttons = ['overview', 'generalization', 'training', 'diagnostics'].map(view => {
   const button = new Element(); button.dataset.studyView = view; return button;
 });
-const controls = Object.fromEntries(['study-controls', 'experiment-select', 'chart-select', 'show-all', 'figure-status', 'previous-chart', 'next-chart', 'chart-controls', 'chart-label', 'experiment-field', 'comparison-key', 'fallback-navigation'].map(id => [id, new Element()]));
+const controls = Object.fromEntries(['run-field', 'run-select', 'chart-type-select', 'region-select', 'study-controls', 'experiment-select', 'chart-select', 'show-all', 'figure-status', 'previous-chart', 'next-chart', 'chart-controls', 'chart-label', 'experiment-field', 'comparison-key', 'fallback-navigation'].map(id => [id, new Element()]));
 const events = {};
 const location = {hash: ''};
 const context = {
@@ -67,3 +67,19 @@ buttons.find(b => b.dataset.studyView === 'overview').fire('click');
 assert.equal(controls['chart-controls'].hidden, true);
 assert.equal(sections[0].hidden, false);
 console.log('Navigation passed: views, chart stepping, paired models, show-all, remembered selection, deep links, print.');
+
+buttons.find(b => b.dataset.studyView === 'generalization').fire('click');
+controls['region-select'].value = 'saddle'; controls['region-select'].fire('change');
+assert.deepEqual(visible(), ['Saddle']);
+controls['run-field', 'run-select', 'chart-type-select'].value = 'Accurate area'; controls['run-field', 'run-select', 'chart-type-select'].fire('change');
+assert.deepEqual(visible(), []);
+assert.equal(controls['figure-status'].textContent, 'No charts match these filters.');
+controls['region-select'].value = ''; controls['region-select'].fire('change');
+assert.deepEqual(visible(), ['Area']);
+sections[1].dataset.runGroup = 'dual-representation-exp-1';
+buttons.find(b => b.dataset.studyView === 'generalization').fire('click');
+controls['run-select'].value = 'dual-representation-exp-1';
+controls['run-select'].fire('change');
+assert.equal(controls['run-select'].value, 'dual-representation-exp-1');
+assert.equal(controls['experiment-select'].children.length, 1);
+assert.equal(sections[1].hidden, false);

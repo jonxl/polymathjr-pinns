@@ -136,6 +136,8 @@ def training_section(roots, assets, output):
             label = LABELS[REPS.index(rep)]
             model_parts = path.parent.relative_to(root).parts
             model_name = '/'.join(model_parts[-3:-1] if 'family' in model_parts else model_parts[-2:-1])
+            if model_parts[-1] not in REPS and len(model_parts)>=3:
+                model_name = '/'.join((model_parts[-3],model_parts[-1]))
             title = f"{label} · {model_name.replace('_', ' ')}"
             name = f"training-{len(entries)+1:02d}-{slug(identity)}"
             render_training_history(history, rep, title, assets/name)
@@ -173,10 +175,10 @@ def pair_panels(left, right):
         for field in ("kind", "xlabel", "ylabel"):
             if p.get(field) != q.get(field):
                 raise ValueError(f"Different {field} in {key}")
-        for field in ("categories", "row_labels", "col_labels", "x_values", "y_values"):
+        for field in ("categories", "row_labels", "col_labels", "x_values", "y_values", "training_patch"):
             if p["data"].get(field) != q["data"].get(field):
                 raise ValueError(f"Different coordinates in {key}: {field}")
-        for field in ("log_color", "log_y", "log_x", "floor_val", "yflip"):
+        for field in ("log_color", "log_y", "log_x", "floor_val", "yflip", "horizontal_lines", "vertical_lines"):
             if p.get("opts", {}).get(field) != q.get("opts", {}).get(field):
                 raise ValueError(f"Different scale convention in {key}: {field}")
         if p["kind"] in ("lines", "scatter", "grouped_bar"):
@@ -210,14 +212,15 @@ def render_pair(pair, destination, labels=LABELS):
                     raise ValueError(f"Saved series {series['name']!r} has {len(series['x'])} x coordinates but {len(series['y'])} y values; regenerate this source panel")
     fig, axes = plt.subplots(1, len(pair), figsize=(7.5*len(pair), 5.8), layout="constrained", squeeze=False)
     axes = axes.ravel()
-    all_values = np.concatenate([values(p).ravel() for p in pair])
+    guides = [float(line["value"]) for p in pair for line in p.get("opts", {}).get("horizontal_lines", [])]
+    all_values = np.concatenate([values(p).ravel() for p in pair]+[np.asarray(guides)])
     finite = all_values[np.isfinite(all_values)]
     if pair[0].get("opts", {}).get("log_y"):
         finite = finite[finite > 0]
     lo, hi = (float(finite.min()), float(finite.max())) if len(finite) else (0., 1.)
     if lo == hi:
         lo, hi = (lo / 2, hi * 2) if lo > 0 else (-.5, .5)
-    is_area = pair[0]["id"] == "genradius_areas"
+    is_area = pair[0]["id"] in ("genradius_areas", "geometry-areas", "outside-patch-area")
     use_log = pair[0].get("opts", {}).get("log_y") and len(finite) > 0 and not is_area
     for ax, panel, label in zip(axes, pair, labels):
         data, opts, kind = panel["data"], panel.get("opts", {}), panel["kind"]
@@ -246,6 +249,18 @@ def render_pair(pair, destination, labels=LABELS):
                     if np.nanmin(z) < c < np.nanmax(z):
                         contours = ax.contour(xs, ys, z, levels=[c], colors="white", linewidths=1)
                         ax.clabel(contours, fmt={c: f"ε={level:g}"}, fontsize=8)
+                patch = data.get("training_patch")
+                if patch:
+                    points = np.asarray(patch["points"])
+                    ax.scatter(points[:, 0], points[:, 1], s=9, facecolors="white", edgecolors="black", linewidths=.3, label="training equations", zorder=4)
+                    if patch["kind"] == "disk":
+                        ax.add_patch(plt.Circle(patch["center"], patch["radius"], fill=False, edgecolor="#dc2626", linewidth=1.5, label="training disk", zorder=5))
+                    elif patch["kind"] == "segment":
+                        cx, cy = patch["center"]
+                        ax.plot([cx, cx], [cy-patch["radius"], cy+patch["radius"]], color="#dc2626", linewidth=2, label="training segment", zorder=5)
+                    ax.legend(fontsize=7, loc="lower left")
+                    ax.set_xlim(min(xs), max(xs))
+                    ax.set_ylim(min(ys), max(ys))
             else:
                 ax.set_xticks(xs, data["col_labels"], rotation=35, ha="right", fontsize=8)
                 ax.set_yticks(ys, data["row_labels"], fontsize=8)
@@ -261,13 +276,16 @@ def render_pair(pair, destination, labels=LABELS):
                     width = .8 / len(data["series"])
                     x = np.arange(len(data["categories"])) + (i-(len(data["series"])-1)/2)*width
                     bars = ax.bar(x, series["values"], width=width, label=series["name"])
-                    if is_area:
+                    if is_area or opts.get("show_values"):
                         ax.bar_label(bars, fmt="%.3g", padding=4, fontsize=9)
                         ax.scatter(x, series["values"], s=18, color="#245b91", zorder=3)
                 elif kind == "scatter":
                     ax.scatter(series["x"], series["y"], s=8, label=series["name"])
                 else:
                     ax.plot(series["x"], series["y"], linewidth=1.5, label=series["name"])
+                    if data.get("censored") is not None:
+                        mask = np.asarray(data["censored"], dtype=bool)
+                        ax.scatter(np.asarray(series["x"])[mask], np.asarray(series["y"])[mask], marker="^", color="#b45309", s=24, label="accurate at search cap")
             if kind == "grouped_bar":
                 ax.set_xticks(np.arange(len(data["categories"])), data["categories"], rotation=35, ha="right", fontsize=8)
             if use_log:
@@ -285,6 +303,10 @@ def render_pair(pair, destination, labels=LABELS):
                     ax.text(.02, .97, "No positive values; linear scale shown", transform=ax.transAxes, va="top", fontsize=8)
             if opts.get("log_x"):
                 ax.set_xscale("log")
+            for line in opts.get("horizontal_lines", []):
+                ax.axhline(line["value"], color="#b45309", linestyle="--", linewidth=1, label=line["label"])
+            for line in opts.get("vertical_lines", []):
+                ax.axvline(line["value"], color="#475569", linestyle=":", linewidth=1.5, label=line["label"])
             ax.grid(alpha=.2)
             ax.legend(fontsize=7, loc="best")
         else:
@@ -295,6 +317,8 @@ def render_pair(pair, destination, labels=LABELS):
 
 
 def caption(panel):
+    if panel.get("opts", {}).get("caption"):
+        return panel["opts"]["caption"]
     identity = panel["id"]
     if identity == "genradius_areas":
         return "Estimated area with relative solution error below ε = 0.1 (10%). Zero means no sampled point meets this threshold; it does not mean missing data."
@@ -366,7 +390,8 @@ def build(args):
         mode = meta.get("mode", "archived results; matching controls not recorded")
         if geometry:
             counts.setdefault(experiment, []).append(mode)
-        entry = {"name": name, "mode": mode, "metadata": meta, "sources": [], "figures": [], "training_diagnostics": [], "unavailable_figures": []}
+        run_group = left_path.parent.parent.parent.name if geometry else "Earlier saved experiments"
+        entry = {"name": name, "run_group": run_group, "mode": mode, "metadata": meta, "sources": [], "figures": [], "training_diagnostics": [], "unavailable_figures": []}
         source_links = []
         for rep, path in zip(REPS, (left_path, right_path)):
             target = assets / f"{tag}-{rep}.json"
@@ -375,7 +400,12 @@ def build(args):
             entry["sources"].append({"path": str(path.resolve()), "sha256": digest})
             source_links.append(f'<a href="{target.relative_to(output).as_posix()}">{rep} data</a>')
         section_title, description = SECTIONS.get(name, (name.replace("_", " ").capitalize(), EXPERIMENTS.get(experiment, "Compare both representations on the same experiment.")))
-        body = [f'<section id="{tag}"><h2>{esc(section_title)}</h2>', f'<p>{esc(description)}</p>']
+        body = [f'<section id="{tag}" data-run-group="{esc(run_group)}"><h2>{esc(section_title)}</h2>', f'<p>{esc(description)}</p>']
+        if "training_controls" in meta:
+            controls = meta["training_controls"]
+            body.append(f'<p class="facts">N = {int(controls["power_series_degree"])} · {int(controls["adam_iterations"]):,} Adam iterations · analytic evaluation on [{controls["x_left"]:g}, {controls["x_right"]:g}]</p>')
+        if meta.get("fixture"):
+            body.append(f'<p class="status">{esc(meta["fixture"])}</p>')
         if "Ng" in meta:
             body.append(f'<p class="facts">Evaluation grid: {int(meta["Ng"])} × {int(meta["Ng"])} equations. Grid density is separate from training quality.</p>')
         body.append(f'<details><summary>Data and settings</summary><p>{esc(mode)} · {" · ".join(source_links)}</p><pre>{esc(json.dumps(meta, indent=2))}</pre></details>')
@@ -399,7 +429,7 @@ def build(args):
                 continue
             relative = (assets / filename).relative_to(output).as_posix()
             title = pair[0]["title"].replace(" (power_series)", "")
-            body.append(f'<figure><h3>{esc(title)}</h3><a href="{relative}.png"><img loading="lazy" src="{relative}.png" alt="{esc(title)}: power series left, eigenvalue right"></a><figcaption>{esc(caption(pair[0]))} <a href="{relative}.pdf">PDF</a> · <a href="{relative}.png">PNG</a></figcaption></figure>')
+            body.append(f'<figure data-chart-id="{esc(pair[0]["id"])}"><h3>{esc(title)}</h3><a href="{relative}.png"><img loading="lazy" src="{relative}.png" alt="{esc(title)}: power series left, eigenvalue right"></a><figcaption>{esc(caption(pair[0]))} <a href="{relative}.pdf">PDF</a> · <a href="{relative}.png">PNG</a></figcaption></figure>')
             entry["figures"].append(relative+".png")
         body.append("</section>")
         sections.append((tag, section_title, "".join(body)))
@@ -439,15 +469,16 @@ def build(args):
 <button type="button" data-study-view="training" aria-pressed="false">Training histories</button>
 <button type="button" data-study-view="diagnostics" aria-pressed="false">Loss diagnostics</button>
 <button type="button" data-study-view="overview" aria-pressed="false">Experiment guide</button></div>
+<div id="run-field" class="control-field"><label for="run-select">Experiment folder</label><select id="run-select"></select></div>
 <div id="experiment-field" class="control-field"><label for="experiment-select">Experiment</label><select id="experiment-select"></select></div>
 <div id="chart-controls"><div class="control-row">
+<div class="control-field"><label for="chart-type-select">Chart type</label><select id="chart-type-select"></select></div>
+<div class="control-field"><label for="region-select">Training region</label><select id="region-select"></select></div>
 <div class="control-field chart-picker"><label id="chart-label" for="chart-select">Chart</label><select id="chart-select"></select></div>
 <div class="step-buttons"><button type="button" id="previous-chart">Previous</button><button type="button" id="next-chart">Next</button></div>
-<label><input id="show-all" type="checkbox"> Show all in this view</label></div>
+<label><input id="show-all" type="checkbox"> Show all matching charts</label></div>
 <p id="figure-status" role="status" aria-live="polite"></p></div></div>
 <div id="comparison-key" class="columns"><span>Power series</span><span>Eigenvalue / trace–determinant</span></div>
-<details><summary>How to read this study</summary><p>Each (τ, Δ) point specifies u″ − τu′ + Δu = 0. Solution relative L2 compares reconstructed functions. The finite power-series degree contributes truncation error; increasing degree does not guarantee smaller learning error. The shared trainer uses PDE and supervision losses, with initial-condition loss recorded as a diagnostic. The two supervision terms are different metrics.</p>
-<p>Archived results retain the evaluation conventions used when saved. Their metadata does not establish matched training controls or an independent analytic reference. New geometry runs record a shared design fingerprint and use Float64 analytic solution scoring. Frozen probes do not establish geometry-specific training or transfer results. These experiments use the shared Adam trainer, not the reference scripts’ Adam/LBFGS protocol.</p></details>
 <section id="geometry"><h2>Generalization experiments</h2><p>Vary where we train, then measure solution error on held-out equations.</p>
 <table><thead><tr><th>Experiment</th><th>What we measure</th></tr></thead><tbody>{''.join(rows)}</tbody></table>
 <p class="facts">{completed}/9 geometry experiments have completed paired results in this export. The figures below also include earlier saved experiments.</p>

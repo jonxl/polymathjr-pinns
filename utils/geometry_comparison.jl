@@ -11,8 +11,11 @@ function paired_panels(power::PanelSet, eigen::PanelSet)
     panels=Panel[]
     for (p,e) in zip(power.panels,eigen.panels)
         (p.id,p.kind,p.xlabel,p.ylabel)==(e.id,e.kind,e.xlabel,e.ylabel) || error("Chart definitions differ: $(p.id)")
-        for key in ("categories","row_labels","col_labels","x_values","y_values")
+        for key in ("categories","row_labels","col_labels","x_values","y_values","training_patch")
             get(p.data,key,nothing)==get(e.data,key,nothing) || error("Chart coordinates differ: $(p.id)/$key")
+        end
+        for key in ("horizontal_lines","vertical_lines")
+            get(p.opts,key,nothing)==get(e.opts,key,nothing) || error("Plot guides differ: $(p.id)/$key")
         end
         if p.kind===:lines
             [s["x"] for s in p.data["series"]]==[s["x"] for s in e.data["series"]] ||
@@ -44,7 +47,7 @@ function paired_panels(power::PanelSet, eigen::PanelSet)
         end
         for (rep,panel) in (("power_series",p),("eigenvalue",e))
             push!(panels,Panel(panel.kind,"$rep/$(panel.id)",panel.title,panel.xlabel,panel.ylabel,
-                deepcopy(panel.data),deepcopy(opts)))
+                deepcopy(panel.data),merge(deepcopy(panel.opts),Dict(k=>deepcopy(opts[k]) for k in ("clims","ylims") if haskey(opts,k)))))
         end
     end
     PanelSet("$(power.meta["experiment"]): power series vs eigenvalue",
