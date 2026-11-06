@@ -38,20 +38,53 @@ DEBUG = false  # Toggle verbose debug output
 
 using CUDA
 
-include("../utils/gpu_utils.jl")
+if isdefined(parentmodule(@__MODULE__), :GPUUtils)
+  import ..GPUUtils
+else
+  include("../utils/gpu_utils.jl")
+end
 using .GPUUtils
 
-include("../utils/ProgressBar.jl")
+if isdefined(parentmodule(@__MODULE__), :ProgressBar)
+  import ..ProgressBar
+else
+  include("../utils/ProgressBar.jl")
+end
 using .ProgressBar
 
-include("../utils/loss_functions.jl")
+if isdefined(parentmodule(@__MODULE__), :loss_functions)
+  import ..loss_functions
+else
+  include("../utils/loss_functions.jl")
+end
 using .loss_functions
 
-include("../utils/helper_funcs.jl")
+if isdefined(parentmodule(@__MODULE__), :helper_funcs)
+  import ..helper_funcs
+else
+  include("../utils/helper_funcs.jl")
+end
 using .helper_funcs
 
-include("../utils/safetensors_utils.jl")
+if isdefined(parentmodule(@__MODULE__), :SafeTensorSnapshots)
+  import ..SafeTensorSnapshots
+else
+  include("../utils/safetensors_utils.jl")
+end
 using .SafeTensorSnapshots
+
+if isdefined(parentmodule(@__MODULE__), :ExperimentConfiguration)
+  import ..ExperimentConfiguration
+else
+  include("../utils/experiment_config.jl")
+end
+using .ExperimentConfiguration
+if isdefined(parentmodule(@__MODULE__), :TrainingEvents)
+  import ..TrainingEvents
+else
+  include("../utils/training_events.jl")
+end
+using .TrainingEvents
 
 # Ensure a "data" directory exists for saving plots.
 isdir("data") || mkpath("data")
@@ -89,6 +122,15 @@ struct PINNSettings
   # ODE input; `:trace_determinant` gives both dual-study models the same
   # two-value (tau, delta) input while the loss still uses [delta, -tau, 1].
   input_encoding::Symbol
+  model::ModelConfig
+  loss::LossConfig
+end
+
+function PINNSettings(neuron_num, seed, ode_matrices, maxiters_lbfgs, N, K, P, left, right, sw, pw, xs, optimizer, representation, input_encoding; model=ModelConfig(hidden_widths=fill(neuron_num, 3)), loss=LossConfig(coefficient_weighting=coefficient_weighting(representation)))
+  rep = canonical_representation(representation)
+  rep in (:power_series, :eigenvalue) || error("Unknown representation")
+  rep === :eigenvalue && loss.coefficient_weighting !== :uniform && error("Coefficient weighting requires power series")
+  return PINNSettings(neuron_num, seed, ode_matrices, maxiters_lbfgs, N, K, P, left, right, sw, pw, xs, optimizer, rep, input_encoding, model, loss)
 end
 
 # Backwards-compatible constructor: existing positional call sites
@@ -195,12 +237,10 @@ function initialize_network(settings::PINNSettings; use_gpu::Bool=false)
   # Layer widths come from the representation; the hidden trunk is shared.
   in_width, out_width = io_dims(settings)
 
-  coeff_net = Lux.Chain(
-    Lux.Dense(in_width, settings.neuron_num, σ),
-    Lux.Dense(settings.neuron_num, settings.neuron_num, σ),
-    Lux.Dense(settings.neuron_num, settings.neuron_num, σ),
-    Lux.Dense(settings.neuron_num, out_width)
-  )
+  activation = settings.model.activation === :sigmoid ? Lux.σ : settings.model.activation === :tanh ? tanh : Lux.relu
+  widths = [in_width; settings.model.hidden_widths; out_width]
+  coeff_net = Lux.Chain((Lux.Dense(widths[i], widths[i+1], i == length(widths)-1 ? identity : activation)
+                         for i in 1:length(widths)-1)... )
 
   # Initialize the network's parameters with the specified seed
   rng = Random.default_rng()
@@ -279,7 +319,7 @@ function loss_fn(p_net, data, coeff_net, st, ode_matrix_flat, boundary_condition
   loss_bc = generate_loss_bc_value(loss_func_settings; ode_buffers=ode_buffers)
 
   # Calculate supervised loss using the plugboard coefficients
-  loss_supervised = (settings.representation === :power_series_variation ? generate_loss_supervised_variation : generate_loss_supervised_value)(loss_func_settings; ode_buffers=ode_buffers)
+  loss_supervised = (settings.loss.coefficient_weighting === :descending ? generate_loss_supervised_variation : generate_loss_supervised_value)(loss_func_settings; ode_buffers=ode_buffers)
 
   # Optimized objective excludes BC; BC is logged as a diagnostic.
   return loss_pde * settings.pde_weight * settings.num_supervised + settings.supervised_weight * loss_supervised, loss_bc, loss_pde, loss_supervised
@@ -352,7 +392,7 @@ function global_loss_batched(p_net, settings::PINNSettings, coeff_net, st, buf)
   loss_pde, loss_bc, loss_sup = if buf isa BatchEigBuffers
     batched_eigenvalue_losses(out, buf)
   else
-    batched_power_series_losses(out, buf; variation=settings.representation === :power_series_variation)
+    batched_power_series_losses(out, buf; variation=settings.loss.coefficient_weighting === :descending)
   end
 
   total = loss_pde * settings.pde_weight * settings.num_supervised +
@@ -415,8 +455,14 @@ end
 We train the PINN on the training dataset and return the network
 =#
 
-function train_pinn(settings::PINNSettings, output_dir; run_id::String=generate_run_id(settings.optimizer), milestone_interval::Int=0, on_milestone::Union{Function,Nothing}=nothing, on_interrupt::Union{Function,Nothing}=nothing, progress_callback::Union{Function,Nothing}=nothing, write_loss_csv::Bool=true, snapshot_path::Union{String,Nothing}=nothing, batch_size::Int=0, snapshot_epoch_interval::Int=10, batch_provider::Union{Function,Nothing}=nothing, streaming_dataset_size::Int=0)
-  csv_file = joinpath(output_dir, "loss.csv")
+function train_pinn(settings::PINNSettings, output_dir; run_id::String=generate_run_id(settings.optimizer), milestone_interval::Int=0, on_milestone::Union{Function,Nothing}=nothing, on_interrupt::Union{Function,Nothing}=nothing, progress_callback::Union{Function,Nothing}=nothing, write_loss_csv::Bool=true, snapshot_path::Union{String,Nothing}=nothing, batch_size::Int=0, snapshot_epoch_interval::Int=10, batch_provider::Union{Function,Nothing}=nothing, streaming_dataset_size::Int=0, metrics_interval::Int=100, on_event::Function=(_ -> nothing))
+  metrics_interval > 0 || error("metrics_interval must be positive")
+  batch_provider !== nothing || !isempty(settings.ode_matrices) || error("Training dataset is empty")
+  write_resolved_settings(output_dir, settings; batch_size, metrics_interval, checkpoint_epochs=snapshot_epoch_interval)
+  emit = event -> begin
+    write_training_artifacts(output_dir, event; write_loss_csv)
+    on_event(event)
+  end
 
   use_gpu = GPUUtils.is_gpu_available()
 
@@ -430,7 +476,14 @@ function train_pinn(settings::PINNSettings, output_dir; run_id::String=generate_
   end
 
   if snapshot_path !== nothing
-    coeff_net, p_ca, st, _ = SafeTensorSnapshots.load_any_model(snapshot_path)
+    coeff_net, p_ca, st, metadata = SafeTensorSnapshots.load_any_model(snapshot_path)
+    canonical_representation(Symbol(get(metadata,"representation","power_series"))) === settings.representation || error("Warm-start representation differs from model configuration")
+    in_width,out_width=io_dims(settings)
+    widths=[in_width;settings.model.hidden_widths;out_width]
+    layers=collect(coeff_net.layers)
+    length(layers)==length(widths)-1 && all(i->layers[i].in_dims==widths[i] && layers[i].out_dims==widths[i+1],eachindex(layers)) || error("Warm-start architecture differs from model configuration")
+    expected_activation=settings.model.activation === :sigmoid ? Lux.σ : settings.model.activation === :tanh ? tanh : Lux.relu
+    all(layer->layer.activation === expected_activation,layers[1:end-1]) || error("Warm-start activation differs from model configuration")
     p_init_ca = use_gpu ? CUDA.cu(p_ca) : p_ca
     @info "Loaded model from snapshot: $snapshot_path"
   else
@@ -473,10 +526,10 @@ function train_pinn(settings::PINNSettings, output_dir; run_id::String=generate_
   end
 
   # How often to record metrics and update the progress bar (every N iterations)
-  LOG_INTERVAL = 100
+  LOG_INTERVAL = metrics_interval
 
   # Pre-allocate history buffer: columns = [total, bc, pde, supervised], rows = sampled iterations
-  max_logged = cld(settings.maxiters_lbfgs, LOG_INTERVAL) + 1  # ceiling division + 1 for safety
+  max_logged = cld(settings.maxiters_lbfgs, LOG_INTERVAL) + 2  # ceiling division + 1 for safety
   history_buf = Matrix{Float32}(undef, max_logged, 4)
   history_iters = Vector{Int}(undef, max_logged)
   history_len = Ref(0)
@@ -514,12 +567,14 @@ function train_pinn(settings::PINNSettings, output_dir; run_id::String=generate_
   end
 
   function custom_callback(state, l; progress_bar)
-    iter_count[] += 1
-    iteration = iter_count[]
     latest_params[] = state.u
+    iteration = Int(state.iter)
+    # The solver may call back twice at its final iteration (best-state selection).
+    iteration <= iter_count[] && return false
+    iter_count[] = iteration
 
     # Only record metrics + update progress bar every LOG_INTERVAL iterations
-    if iteration % LOG_INTERVAL == 0 || iteration == 1
+    if iteration % LOG_INTERVAL == 0 || iteration == 1 || iteration == settings.maxiters_lbfgs
       bc, pde, sup = latest_metrics[]
       idx = history_len[] + 1
       history_len[] = idx
@@ -528,6 +583,7 @@ function train_pinn(settings::PINNSettings, output_dir; run_id::String=generate_
       history_buf[idx, 2] = Float32(bc)
       history_buf[idx, 3] = Float32(pde)
       history_buf[idx, 4] = Float32(sup)
+      emit((kind=:metrics, iteration=iteration, total=Float32(l), pde=pde, bc=bc, supervised=sup))
       progress_bar(state, l)
     end
 
@@ -541,6 +597,7 @@ function train_pinn(settings::PINNSettings, output_dir; run_id::String=generate_
        snapshot_epoch_interval > 0 &&
        completed_epoch % snapshot_epoch_interval == 0
       p_current = use_gpu ? ComponentArray(Array(getdata(state.u)), getaxes(state.u)) : state.u
+      emit((kind=:checkpoint, iteration=iteration, parameters=p_current))
       on_milestone(p_current, iteration, coeff_net, st, run_id)
     end
 
@@ -588,6 +645,10 @@ function train_pinn(settings::PINNSettings, output_dir; run_id::String=generate_
       end
       (u = latest_params[],)  # mock result with latest params
     else
+      open(joinpath(output_dir,"status.json"),"w") do io
+        JSON.print(io,Dict("status"=>"failed","iterations"=>iter_count[],"error"=>sprint(showerror,e)),2)
+      end
+      emit((kind=:failed,error=e,iteration=iter_count[]))
       rethrow(e)
     end
   end
@@ -624,18 +685,11 @@ function train_pinn(settings::PINNSettings, output_dir; run_id::String=generate_
     supervised = history_buf[i, 4]
   ) for i in 1:n]
 
-  if write_loss_csv && n > 0
-    df = DataFrame(
-      iteration  = history_iters[1:n],
-      total      = history_buf[1:n, 1],
-      bc         = history_buf[1:n, 2],
-      pde        = history_buf[1:n, 3],
-      supervised = history_buf[1:n, 4]
-    )
-    CSV.write(csv_file, df)
-  end
-
-  return p_trained, coeff_net, st, run_id, history
+  result = TrainingResult(p_trained, coeff_net, st, run_id, history,
+                          interrupted ? :interrupted : :completed, iter_count[])
+  emit((kind=:finished, result=result, iterations=history_iters[1:n],
+        pde_multiplier=settings.pde_weight*settings.num_supervised, supervised_weight=settings.supervised_weight))
+  return result
 end
 
 # ---------------------------------------------------------------------------
@@ -654,10 +708,11 @@ function evaluate_solution(settings::PINNSettings, p_trained, coeff_net, st, ben
     precompute_batch_buffers(settings, items, false, identity)
   out = first(coeff_net(buf.X, p_trained, st))
   U = batched_reconstruct(out, buf)
-  UT = true_solutions(buf)
+  UT = analytic_solutions(buf,settings.xs)
+  truncated = settings.representation === :power_series ? truncated_solutions(buf) : nothing
   pde, bc, sup = settings.representation === :eigenvalue ?
     batched_eigenvalue_losses(out, buf) :
-    batched_power_series_losses(out, buf; variation=settings.representation === :power_series_variation)
+    batched_power_series_losses(out, buf; variation=settings.loss.coefficient_weighting === :descending)
 
   loss = Float32(settings.pde_weight) * Float32(settings.num_supervised) * Float32(pde) +
          Float32(settings.supervised_weight) * Float32(sup)
@@ -684,9 +739,15 @@ function evaluate_solution(settings::PINNSettings, p_trained, coeff_net, st, ben
       "alpha_matrix" => vec(alpha_matrix_key),
       "benchmark_coefficients" => benchmark_series_coeffs,
       "function_error" => Float64(local_relerr),
+      "power_series_degree" => settings.n_terms_for_power_series,
+      "coefficient_weighting" => String(settings.loss.coefficient_weighting),
+      "truncation_error" => truncated === nothing ? nothing : Float64(relative_l2(truncated[:,idx], UT[:,idx])),
+      "learned_vs_truncated_error" => truncated === nothing ? nothing : Float64(relative_l2(U[:,idx], truncated[:,idx])),
       "objective" => Float64(loss),
       "objective_components" => Dict(
         "optimized" => ["pde", "supervised"],
+        "pde_multiplier" => Float64(settings.pde_weight*settings.num_supervised),
+        "supervised_weight" => Float64(settings.supervised_weight),
         "diagnostic" => ["bc"],
         "pde" => Float64(pde),
         "bc" => Float64(bc),

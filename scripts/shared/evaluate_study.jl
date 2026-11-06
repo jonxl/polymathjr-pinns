@@ -1,6 +1,6 @@
 #!/usr/bin/env julia
 
-include("../../utils/dual_study_evaluation.jl")
+using PINNStudies: DualStudyEvaluation
 using .DualStudyEvaluation
 
 function usage()

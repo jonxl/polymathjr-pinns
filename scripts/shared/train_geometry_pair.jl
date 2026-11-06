@@ -1,7 +1,8 @@
 #!/usr/bin/env julia
 # Resume at completed representation boundaries; never overwrite partial training.
 length(ARGS) == 3 || error("Usage: train_geometry_pair.jl OUTPUT_ROOT EXPERIMENT ITERATIONS")
-include("../../utils/geometry_experiments.jl")
+using PINNStudies
+using PINNStudies: GeometryExperiments
 using .GeometryExperiments
 const GE = GeometryExperiments
 const GG = GE.GeneralizationGeometry

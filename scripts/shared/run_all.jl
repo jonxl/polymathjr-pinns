@@ -11,11 +11,12 @@ using ProgressMeter
 using Serialization
 using SHA
 
-include("../../architectures/PINN.jl")
+using PINNStudies
+using PINNStudies: PINN, TUI, RunManagement
 using .PINN
-include("../../utils/dual_dataset.jl")
+using PINNStudies: DualDataset
 using .DualDataset
-include("../../utils/tui.jl")
+
 using .TUI
 
 const REGIONS = [:saddle, :stable_node, :unstable_node,
@@ -40,8 +41,7 @@ const RUN_GLOBAL_MODELS = true
 const RUN_FAMILY_MODELS = true
 const GPU_COUNT = parse(Int, get(ENV, "DUAL_GPU_COUNT", "8"))
 const RUN_NAME = "dataset-$(DATASET_SEED)-shuffle-$(SHUFFLE_SEED)-model-$(MODEL_SEED)-batch-$(BATCH_SIZE)"
-const STUDY_ROOT = get(ENV, "DUAL_STUDY_ROOT",
-  joinpath("results", "dual-rep-studies", "dual-representation-10m"))
+const STUDY_ROOT = haskey(ENV,"DUAL_STUDY_ROOT") ? ENV["DUAL_STUDY_ROOT"] : RunManagement.new_run_directory()
 const OUTPUT_ROOT = joinpath(STUDY_ROOT, RUN_NAME)
 
 # Live display backend: "progress" (ProgressMeter, one bar per GPU, offset-
@@ -76,6 +76,22 @@ function git_commit()
 end
 
 const SOURCE_SNAPSHOT_FILES = [
+  "src/PINNStudies.jl",
+  "utils/snapshot_utils.jl",
+  "utils/training_schemes.jl",
+  "utils/two_d_grid_search_hyperparameters.jl",
+  "utils/experiment_config.jl",
+  "utils/run_management.jl",
+  "utils/training_events.jl",
+  "utils/experiments.jl",
+  "utils/geometry_experiments.jl",
+  "utils/generalization_geometry.jl",
+  "utils/geometry_comparison.jl",
+  "utils/geometry_panels.jl",
+  "utils/generalization_variants.jl",
+  "utils/variants.jl",
+  "viz/PanelSpec.jl",
+  "scripts/shared/new_run_directory.jl",
   "Project.toml",
   "Manifest.toml",
   "architectures/PINN.jl",
@@ -105,7 +121,7 @@ function source_snapshot_manifest()
     "sha256" => sha256_file(relative),
   ) for relative in SOURCE_SNAPSHOT_FILES]
   tree_id = bytes2hex(sha256(join(
-    ("$(entry[\"path\"]):$(entry[\"sha256\"])" for entry in files), "\n")))
+    ("$(entry["path"]):$(entry["sha256"])" for entry in files), "\n")))
   return Dict(
     "format" => "polymathjr-study-source-snapshot",
     "format_version" => 1,
@@ -456,7 +472,7 @@ function build_jobs()
   return jobs
 end
 
-function run_all_gpus(jobs)
+function run_all_gpus(jobs; run_context=nothing)
   CUDA.functional() || error("The 10M run requires CUDA, but CUDA.functional() is false")
   devices = collect(CUDA.devices())
   available = length(devices)
@@ -512,10 +528,14 @@ function run_all_gpus(jobs)
     push!(workers, Threads.@spawn begin
       CUDA.device!(selected_devices[slot])
       for job in queue
+        job_id="$(job.scope)-$(job.region)-$(job.representation)"
+        run_context === nothing || RunManagement.job_status!(run_context,job_id,:running)
         try
           train_model(job.representation, job.scope;
                       region=job.region, board=board, device_labels=device_labels, gpu_slot=slot)
+          run_context === nothing || RunManagement.job_status!(run_context,job_id,:completed)
         catch err
+          run_context === nothing || RunManagement.job_status!(run_context,job_id,err isa InterruptException ? :interrupted : :failed;error=sprint(showerror,err))
           display_fail!(board, slot,
             "$(job.region === nothing ? "global" : job.region)-$(job.representation) FAILED")
           bt = catch_backtrace()
@@ -546,6 +566,16 @@ function run_all_gpus(jobs)
   isempty(failed) || error("$(length(failed)) model job(s) failed; see errors above")
 end
 
-run_all_gpus(build_jobs())
+run_context=RunManagement.attach_run(OUTPUT_ROOT)
+RunManagement.with_run_logging(run_context) do
+  try
+    run_all_gpus(build_jobs();run_context)
+  catch e
+    RunManagement.job_status!(run_context,"runner",:failed;error=sprint(showerror,e))
+    rethrow()
+  finally
+    RunManagement.finish_run!(run_context)
+  end
+end
 
 @info "Dual-representation pretraining complete" output_root=OUTPUT_ROOT

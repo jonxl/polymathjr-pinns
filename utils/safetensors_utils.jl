@@ -80,6 +80,8 @@ function _build_chain(architecture::Vector)
       Lux.σ
     elseif act == "linear" || act == "none"
       identity
+    elseif act == "tanh"
+      tanh
     elseif act == "relu"
       Lux.relu
     else

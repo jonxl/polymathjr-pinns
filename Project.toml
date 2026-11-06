@@ -1,7 +1,17 @@
+name = "PINNStudies"
+uuid = "6d477918-9fbe-4d31-a5f9-b4c89f3ea580"
+version = "0.1.0"
+
 [compat]
 CUDA = ">= 3.0"
 
 [deps]
+Mmap = "a63ad114-7e13-5084-954f-fe012c677804"
+UUIDs = "cf7118a7-6976-5b1a-9a39-7adc72f591a4"
+TOML = "fa267f1f-6049-4f14-aa54-33bafae1ed76"
+Serialization = "9e88b42a-f829-5b0c-bbe9-9e923198166b"
+SHA = "ea8e919c-243c-51af-8825-aaa63cd721ce"
+Logging = "56ddb016-857b-54e1-b83d-db4d58db5568"
 ArgParse = "c7e460c6-2fb9-53a9-8c5b-16f535851c63"
 CSV = "336ed68f-0bac-5ca0-87d4-7b16caf5d00b"
 CUDA = "052768ef-5323-5732-b1bb-66c8b64840ba"

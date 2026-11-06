@@ -2,7 +2,7 @@
 
 using JSON
 
-include("../../utils/dual_study_evaluation.jl")
+using PINNStudies: DualStudyEvaluation
 using .DualStudyEvaluation
 
 function usage()

@@ -42,9 +42,9 @@ def export_browser_assets(output):
         shutil.copyfile(source, destination / source.name)
 
 REPS = ("power_series", "eigenvalue")
-LABELS = ("Power series (default)", "Eigenvalue")
+LABELS = ("Power series (uniform coefficient weights)", "Eigenvalue")
 ALL_REPS = (*REPS, "power_series_variation")
-ALL_LABELS = (*LABELS, "Power series (variation)")
+ALL_LABELS = (*LABELS, "Power series (descending coefficient weights)")
 EXPERIMENTS = {
     "transfer": "Measure transfer between training and test ODE families.",
     "extrapolate": "Measure solution error on expanding shells beyond each training region.",
@@ -90,10 +90,15 @@ def load_training_history(path):
         reader = csv.DictReader(stream)
         if not set(fields).issubset(reader.fieldnames or []):
             raise ValueError(f"Missing loss columns: {path}")
+        fields = fields + tuple(k for k in ("weighted_pde", "weighted_supervised") if k in reader.fieldnames)
         rows = [[float(row[k]) for k in fields] for row in reader if row.get("iteration", "").strip()]
     if not rows:
         raise ValueError(f"Empty training history: {path}")
     history = dict(zip(fields, np.asarray(rows, dtype=float).T))
+    if all(k in history for k in ("weighted_pde", "weighted_supervised")):
+        finite = np.isfinite(history["total"]) & np.isfinite(history["weighted_pde"]) & np.isfinite(history["weighted_supervised"])
+        if not np.allclose(history["total"][finite], (history["weighted_pde"] + history["weighted_supervised"])[finite], rtol=1e-5, atol=1e-8):
+            raise ValueError(f"Weighted contributions do not match total: {path}")
     iterations = history["iteration"]
     if not np.all(np.isfinite(iterations)) or np.any(np.diff(iterations) <= 0):
         raise ValueError(f"Iterations must be finite and strictly increasing: {path}")
@@ -101,13 +106,24 @@ def load_training_history(path):
 
 
 def render_training_history(history, rep, title, destination):
-    """One model, one axis: logged total and raw components, without smoothing."""
-    fig, ax = plt.subplots(figsize=(12, 5.5), layout="constrained")
+    """Separate weighted objectives from diagnostics; retain legacy histories without guessing weights."""
+    weighted = all(k in history for k in ("weighted_pde", "weighted_supervised"))
+    fig, axes = plt.subplots(2 if weighted else 1, 1, figsize=(12, 9 if weighted else 5.5), layout="constrained", squeeze=False)
+    ax = axes[-1, 0]
+    if weighted:
+        objective = axes[0, 0]
+        for key, label in (("total", "Total objective"), ("weighted_pde", "Weighted PDE contribution"), ("weighted_supervised", "Weighted supervision contribution")):
+            objective.plot(history["iteration"], history[key], label=label)
+        objective.set(title=title + " · optimized objective", xlabel="Training iteration", ylabel="Weighted loss")
+        objective.set_yscale("symlog", linthresh=1e-8)
+        objective.legend(); objective.grid(alpha=.2)
     supervised = "Coefficient supervision (raw)" if rep != "eigenvalue" else "Solution supervision (raw)"
     if rep == "power_series_variation":
         supervised = "Coefficient supervision (descending weights)"
     labels = {"total": "Total objective (weighted)", "pde": "PDE residual (raw)",
               "bc": "Initial conditions (diagnostic)", "supervised": supervised}
+    if weighted:
+        labels.pop("total")
     colors = {"total": "#24313a", "pde": "#245b91", "bc": "#b45309", "supervised": "#15803d"}
     losses = np.concatenate([history[key] for key in labels])
     finite = losses[np.isfinite(losses)]
@@ -121,7 +137,7 @@ def render_training_history(history, rep, title, destination):
         ax.plot(history["iteration"], y, label=label, color=colors[key],
                 linewidth=2 if key == "total" else 1.3,
                 linestyle="--" if key == "bc" else "-", marker="o", markersize=2)
-    ax.set(title=title, xlabel="Training iteration", ylabel="Logged loss")
+    ax.set(title=title + (" · raw diagnostics" if weighted else " · legacy history (weights unavailable)"), xlabel="Training iteration", ylabel="Logged loss")
     ax.grid(alpha=.2)
     ax.legend(fontsize=9)
     notes = []
@@ -170,23 +186,36 @@ def training_section(roots, assets, output):
                      "representation": rep, "samples": len(history["iteration"]),
                      "first_iteration": float(history["iteration"][0]), "last_iteration": float(history["iteration"][-1]),
                      "figure": relative+".png", "data": relative+".csv"}
+            approximation_path = path.parent / "approximation.json"
+            if approximation_path.exists():
+                entry["approximation"] = read(approximation_path)
             entries.append(entry)
             group_key = '/'.join(part.replace(rep, 'representation') for part in path.parent.resolve().parts)
             group = figures.setdefault(group_key, {"label": f'{model_name.replace("_", " ")} · {identity.rsplit("/", 1)[0]}', "figures": {}})
             group["figures"][rep] = f'<figure><h3>{esc(title)}</h3><p class="facts">{entry["samples"]} logged samples · iterations {entry["first_iteration"]:g}–{entry["last_iteration"]:g}<br>Run: {esc(identity)}</p><a href="{relative}.png"><img loading="lazy" src="{relative}.png" alt="{esc(title)}: total, PDE, initial-condition and supervised losses over iterations"></a><figcaption><a href="{relative}.pdf">PDF</a> · <a href="{relative}.png">PNG</a> · <a href="{relative}.csv">Loss CSV</a></figcaption></figure>'
+            if "approximation" in entry:
+                evidence = entry["approximation"]
+                degree = evidence["degree"]
+                learned = evidence["learned_solution_error"]
+                learned_label = f"{learned:.5g}" if learned is not None and np.isfinite(learned) else "unavailable (nonfinite)"
+                truncation = evidence.get("truncation_error")
+                caption = f'Analytic solution reference · {esc(evidence["evaluation_domain"])} · N={degree} · x ∈ [{evidence["x_left"]}, {evidence["x_right"]}] · {evidence["num_points"]} points. Learned error: {learned_label}.'
+                if truncation is not None:
+                    caption += f' True-coefficient truncation error: {truncation:.5g}. These errors are not additive.'
+                group["figures"][rep] += f'<p class="facts">{caption}</p>'
     if not entries:
         return '', entries
-    section = '<section id="training-history"><h2>Training histories</h2><p>One graph per base model: the recorded objective and all three loss components over training iterations. Curves use their own model’s scale, with no smoothing.</p><p>The total is weighted; the raw components need not sum to it. Initial-condition loss is a diagnostic outside the shared training objective. Supervision measures coefficient error for power series and solution error for eigenvalue models.</p><p class="facts">Check the run identity before relating a history to an evaluation map. The last logged iteration is not a claim of convergence.</p>'
+    section = '<section id="training-history"><h2>Training histories</h2><p>Each new history separates the optimized objective (total and weighted contributions) from raw diagnostic terms. Legacy histories retain their recorded total and raw terms without guessing weights. Curves use their own model’s scale, with no smoothing.</p><p>The total is weighted; the raw components need not sum to it. Initial-condition loss is a diagnostic outside the shared training objective. Supervision measures coefficient error for power series and solution error for eigenvalue models.</p><p class="facts">Check the run identity before relating a history to an evaluation map. The last logged iteration is not a claim of convergence.</p>'
     return section+''.join(paired_figure_row(key, group['label'], group['figures']) for key, group in figures.items())+'</section>', entries
 
 
 def pair_panels(left, right):
     """Match by identity, never by incidental JSON ordering; reject changed designs."""
     lm, rm = left["meta"], right["meta"]
-    if lm.get("representation") != "power_series" or rm.get("representation") not in ALL_REPS[1:]:
+    if lm.get("representation") != "power_series" or not (rm.get("representation") in ALL_REPS[1:] or (rm.get("representation") == "power_series" and rm.get("coefficient_weighting") == "descending")):
         raise ValueError("Expected power_series on the left and eigenvalue on the right")
     for key in set(lm) | set(rm):
-        if key != "representation" and lm.get(key) != rm.get(key):
+        if key not in ("representation", "coefficient_weighting") and lm.get(key) != rm.get(key):
             raise ValueError(f"Different experiment metadata: {key}")
     maps = [{p["id"]: p for p in s["panels"]} for s in (left, right)]
     if any(len(m) != len(s["panels"]) for m, s in zip(maps, (left, right))):
@@ -394,14 +423,13 @@ def build(args):
         # The five diagnostic suites (including both radius modes) use gen-* job directories.
         for path in sorted(directory.rglob("gen-*-power_series/panelset.json")):
             name = path.parent.name.removeprefix("gen-").removesuffix("-power_series")
-            if name not in ("transfer", "extrapolate", "range", "showcase", "gen_radius", "gen_radius_family"):
-                continue  # Geometry panelsets are discovered in their canonical directories above.
             other = path.parent.parent / f"gen-{name}-eigenvalue" / "panelset.json"
             if other.exists():
-                pairs.append((name, path, other, False))
+                pairs.append((name, path, other, read(path)["meta"].get("mode") == "matched_training"))
     manifest = {"date": date, "source_commit": "bb2a102a", "comparisons": [], "geometry_status": {}}
     sections, counts, seen = [], {}, set()
     diagnostics = {}
+    consumed_panelsets = set()
     for number, (name, left_path, right_path, geometry) in enumerate(pairs, 1):
         identity = (left_path.resolve(), right_path.resolve())
         if identity in seen:
@@ -421,6 +449,7 @@ def build(args):
             panels = [(*pair, weighted[1]) for pair, weighted in zip(panels, variation_pairs)]
             source_paths.append(variation_path)
             comparison_reps, comparison_labels = ALL_REPS, ALL_LABELS
+        consumed_panelsets.update(hashlib.sha256(p.read_bytes()).hexdigest() for p in source_paths)
         tag = f"{number:02d}-{slug(name)}"
         meta = left["meta"]
         if geometry and meta.get("mode") == "matched_training" and not meta.get("design_sha256"):
@@ -473,20 +502,44 @@ def build(args):
         body.append("</section>")
         sections.append((tag, section_title, "".join(body)))
         manifest["comparisons"].append(entry)
+    manifest["standalone_results"] = []
+    for directory in args.geometry_root:
+        for path in sorted(directory.rglob("panelset.json")):
+            digest = hashlib.sha256(path.read_bytes()).hexdigest()
+            if digest in consumed_panelsets:
+                continue
+            consumed_panelsets.add(digest)
+            saved = read(path)
+            meta = saved.get("meta", {})
+            rep = meta.get("representation", "unknown")
+            weighting = meta.get("coefficient_weighting", "descending" if rep == "power_series_variation" else "uniform")
+            label = f"{rep} · {weighting}"
+            tag = f"standalone-{len(manifest['standalone_results'])+1}"
+            body = [f'<section id="{tag}"><h2>{esc(label)}</h2><p>Individual result · {esc(path.parent.relative_to(directory))}</p>']
+            figures = []
+            for i, panel in enumerate(saved["panels"]):
+                filename = f"{tag}-{i}"
+                render_pair((panel,), assets/filename, labels=(label,))
+                relative = (assets/filename).relative_to(output).as_posix()
+                body.append(f'<figure><h3>{esc(panel["title"])}</h3><img loading="lazy" src="{relative}.png" alt="{esc(panel["title"])}"><figcaption>{esc(caption(panel))}</figcaption></figure>')
+                figures.append(relative+".png")
+            body.append('</section>')
+            sections.append((tag, label, ''.join(body)))
+            manifest["standalone_results"].append({"source": str(path), "metadata": meta, "figures": figures})
     rows = []
     for name, description in EXPERIMENTS.items():
         modes = counts.get(name, [])
         status = "Matched results available" if "matched_training" in modes else "Frozen probes only" if modes else "Results not found"
         manifest["geometry_status"][name] = status
         rows.append(f'<tr><th scope="row">{esc(name.replace("_", " ").capitalize())}</th><td>{esc(description)}</td></tr>')
-    total = sum(len(c["figures"]) for c in manifest["comparisons"])
+    total = sum(len(c["figures"]) for c in manifest["comparisons"] + manifest["standalone_results"])
     completed = sum(s == "Matched results available" for s in manifest["geometry_status"].values())
     manifest_path = assets / "manifest.json"
     histories, history_entries = training_section(args.training_root + args.geometry_root, assets, output)
     manifest["training_histories"] = history_entries
     manifest_path.write_text(json.dumps(manifest, indent=2)+"\n")
     nav = ' · '.join(f'<a href="#{tag}">{esc(name)}</a>' for tag, name, _ in sections)
-    command = f"bash scripts/shared/run_generalization_study.sh {date} results/generalization/three-variants-1m 1000000"
+    command = f"bash scripts/shared/run_generalization_study.sh {date}"
     diagnostic_section = ''
     if any(diagnostics.values()):
         diagnostic_section = '<section id="training-diagnostics"><h2>Loss diagnostics on evaluation equations</h2><p>These component measurements describe held-out equations, not training progress. Smaller raw losses do not establish better solution accuracy across representations.</p>'

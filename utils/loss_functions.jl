@@ -1,9 +1,14 @@
 module loss_functions
+using LinearAlgebra
 using CSV
 using DataFrames
 using Zygote: Zygote
 
-include("./helper_funcs.jl")
+if isdefined(parentmodule(@__MODULE__), :helper_funcs)
+  import ..helper_funcs
+else
+  include("./helper_funcs.jl")
+end
 using .helper_funcs
 
 # Parametric struct: V can be Vector{Float32} (CPU) or CuVector{Float32} (GPU)
@@ -749,6 +754,50 @@ reconstructed rather than the prediction.
 """
 true_solutions(buf::BatchEigBuffers) = buf.UTRUE
 true_solutions(buf::BatchBuffers) = buf.D[1] * buf.DATA
+
+"Analytic reference for evaluation only; never use truncated targets as exact truth."
+function analytic_solutions(buf::BatchBuffers, xs)
+  alpha=Array(buf.ALPHA); data=Array(buf.DATA)
+  order=size(alpha,1)-1
+  size(data,1) >= order || error("Insufficient initial derivatives for analytic reference")
+  truth=Matrix{Float32}(undef,length(xs),buf.nb)
+  for b in 1:buf.nb
+    if order == 2
+      tau,delta=tau_delta_from_alpha(alpha[:,b])
+      truth[:,b] .= eig_true_solution(tau,delta,data[1,b],data[2,b],xs)
+    else
+      companion=zeros(Float64,order,order)
+      for i in 1:order-1; companion[i,i+1]=1; end
+      companion[end,:] .= -alpha[1:order,b] ./ alpha[end,b]
+      initial=Float64.(data[1:order,b])
+      for (i,x) in enumerate(xs); truth[i,b]=(exp(Float64(x)*companion)*initial)[1]; end
+    end
+  end
+  output=similar(buf.DATA,size(truth)); copyto!(output,truth)
+  return output
+end
+analytic_solutions(buf::BatchEigBuffers, xs)=buf.UTRUE
+"True Taylor reconstruction, independent of padded supervision targets. Evaluation only."
+function truncated_solutions(buf::BatchBuffers)
+  alpha = Float64.(Array(buf.ALPHA))
+  data = Array(buf.DATA)
+  order = size(alpha, 1) - 1
+  degree = size(data, 1) - 1
+  degree + 1 >= order || error("Insufficient initial derivatives for Taylor reference")
+  coefficients = zeros(Float64, size(data))
+  coefficients[1:order, :] .= data[1:order, :]
+  for b in 1:buf.nb, n in 0:degree-order
+    coefficients[n+order+1, b] = -sum(
+      alpha[k+1, b] * coefficients[n+k+1, b] for k in 0:order-1
+    ) / alpha[end, b]
+  end
+  targets = similar(buf.DATA)
+  copyto!(targets, Float32.(coefficients))
+  return batched_reconstruct(targets, buf)
+end
+
+export analytic_solutions, truncated_solutions
+
 
 """
     relative_l2(u_pred, u_true) → Float32

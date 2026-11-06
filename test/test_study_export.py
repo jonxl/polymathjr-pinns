@@ -27,6 +27,44 @@ def sets():
 
 
 class StudyExportTests(unittest.TestCase):
+    def test_weighted_objective_is_separate_and_sums_to_total(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "loss.csv"
+            path.write_text("iteration,total,bc,pde,supervised,weighted_pde,weighted_supervised\n1,23,7,1,2,21,2\n2,12.5,3,0.5,2,10.5,2\n")
+            h = exporter.load_training_history(path)
+            with patch.object(exporter.plt, "close") as close:
+                exporter.render_training_history(h, "eigenvalue", "Eigenvalue", Path(directory)/"history")
+                fig = close.call_args.args[0]
+                self.assertEqual(len(fig.axes), 2)
+                self.assertEqual(len(fig.axes[0].lines), 3)
+                self.assertIn("Solution supervision (raw)", fig.axes[1].get_legend_handles_labels()[1])
+                self.assertNotIn("Initial conditions (diagnostic)", fig.axes[0].get_legend_handles_labels()[1])
+            exporter.plt.close(fig)
+            path.write_text(path.read_text().replace("1,23,", "1,99,"))
+            with self.assertRaisesRegex(ValueError, "do not match total"):
+                exporter.load_training_history(path)
+
+    def test_canonical_power_series_can_have_distinct_loss(self):
+        left, _ = sets()
+        right = copy.deepcopy(left)
+        left["meta"]["coefficient_weighting"] = "uniform"
+        right["meta"]["coefficient_weighting"] = "descending"
+        self.assertEqual(len(list(exporter.pair_panels(left, right))), 2)
+
+    def test_single_variant_report_retains_evaluation_panels(self):
+        import json
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            job = root / "jobs/gen-showcase-eigenvalue"
+            job.mkdir(parents=True)
+            _, saved = sets()
+            (job / "panelset.json").write_text(json.dumps(saved))
+            target, manifest = exporter.build(SimpleNamespace(date="2026-11-06", output=root/"report",
+                panel_data=[], geometry_root=[root/"jobs"], training_root=[]))
+            self.assertEqual(len(manifest["standalone_results"]), 1)
+            self.assertEqual(len(manifest["standalone_results"][0]["figures"]), 2)
+            self.assertIn("Individual result", target.read_text())
+
     def test_export_ships_external_browser_assets(self):
         with tempfile.TemporaryDirectory() as directory:
             target, manifest = exporter.build(SimpleNamespace(
@@ -96,7 +134,7 @@ class StudyExportTests(unittest.TestCase):
             target, manifest = exporter.build(SimpleNamespace(
                 date="2026-11-06", output=root / "web", panel_data=[root],
                 geometry_root=[], training_root=[]))
-            self.assertIn("Power series (variation)", target.read_text())
+            self.assertIn("Power series (descending coefficient weights)", target.read_text())
             self.assertEqual(len(manifest["comparisons"][0]["sources"]), 3)
 
     def test_generalization_job_directories_are_exported(self):

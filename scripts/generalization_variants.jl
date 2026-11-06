@@ -26,21 +26,34 @@ using CUDA
 using Dates
 using JSON
 
-include("../utils/generalization_variants.jl")
+using PINNStudies
+using PINNStudies: GeneralizationVariants
 using .GeneralizationVariants
+using PINNStudies: ExperimentConfiguration, RunManagement
 
 function parse_commandline()
   s = ArgParseSettings(description="Generalization experiments × representations — per-GPU dispatch via TUI.GPUBoard")
 
   @add_arg_table! s begin
-    "--reps"
-      help = "Comma-separated representations (power_series, eigenvalue, power_series_variation)"
+    "--config"
+      help = "TOML experiment preset; explicit CLI flags override it"
       arg_type = String
-      default = "power_series,eigenvalue,power_series_variation"
+    "--date"
+      help = "Date directory for this run"
+      arg_type = String
+      default = string(Dates.today())
+    "--report"
+      help = "Export the HTML report into this run after training"
+      action = :store_true
+    "--variants", "--reps"
+      dest_name = "reps"
+      help = "Comma-separated presets: power_series_standard, power_series_descending, eigenvalue_standard; legacy names accepted"
+      arg_type = String
+      default = nothing
     "--experiments"
       help = "all, or comma-separated experiments: transfer, extrapolate, range, showcase, gen_radius, gen_radius_family, family_disks, spiral_transfer, pair_transfer, parabola_segment, parabola_slide, parabola_curves, parabola_bias, axis_transfer, axis_sweep"
       arg_type = String
-      default = "all"
+      default = nothing
     "--Rmax"
       help = "Number of extrapolation shells (extrapolate, range)"
       arg_type = Int
@@ -56,19 +69,41 @@ function parse_commandline()
     "--maxiters"
       help = "Adam iterations per PINN (forwarded to Experiments.ExperimentConfig)"
       arg_type = Int
-      default = 3000
+      default = nothing
     "--dry-run"
       help = "Print all planned jobs without training or writing results"
       action = :store_true
     "--output-root"
       help = "Root directory for staged results; build_gen_jobs adds a 'gen-<exp>-<rep>' subdir per job"
       arg_type = String
-      default = joinpath("results", Dates.format(now(), "mm-dd-yy-HHMM"))
+      default = nothing
   end
   return parse_args(s)
 end
 
 parsed = parse_commandline()
+base_config = ExperimentConfiguration.load_config(parsed["config"])
+parsed["maxiters"] = something(parsed["maxiters"], base_config["training"]["maxiters"])
+base_config["training"]["maxiters"] = parsed["maxiters"]
+parsed["experiments"] = something(parsed["experiments"],base_config["run"]["experiments"])
+base_config["run"]["experiments"] = parsed["experiments"]
+if parsed["reps"] === nothing
+    parsed["reps"] = parsed["config"] === nothing ? "power_series,eigenvalue,power_series_variation" :
+      (base_config["model"]["representation"] == "power_series" && base_config["objective"]["coefficient_weighting"] == "descending" ? "power_series_variation" : base_config["model"]["representation"])
+end
+parsed["maxiters"] > 0 || error("maxiters must be positive")
+if parsed["n-per-region"] === nothing && base_config["data"]["n_per_region"] > 0
+    parsed["n-per-region"] = base_config["data"]["n_per_region"]
+end
+function job_config(rep, experiment)
+    c=deepcopy(base_config)
+    c["model"]["representation"]=String(ExperimentConfiguration.canonical_representation(rep))
+    c["objective"]["coefficient_weighting"]=String(ExperimentConfiguration.coefficient_weighting(rep))
+    if experiment in GeneralizationVariants.GEOMETRY_EXPERIMENTS || rep === :eigenvalue
+        c["model"]["input_encoding"]="trace_determinant"
+    end
+    return c
+end
 
 # ---- Parse reps / experiments ----
 function parse_reps(s::AbstractString)
@@ -76,7 +111,7 @@ function parse_reps(s::AbstractString)
   for tok in split(s, ",")
     t = strip(tok)
     isempty(t) && continue
-    sym = Symbol(t)
+    sym = get(Dict("power_series_standard"=>:power_series,"power_series_descending"=>:power_series_variation,"eigenvalue_standard"=>:eigenvalue),t,Symbol(t))
     sym in (:power_series, :eigenvalue, :power_series_variation) || error(
       "Unknown representation :$sym; expected power_series, eigenvalue or power_series_variation")
     push!(reps, sym)
@@ -99,7 +134,9 @@ function parse_experiments(s::AbstractString)
 end
 
 reps = parse_reps(parsed["reps"])
+!isempty(reps) && length(unique(reps)) == length(reps) || error("Select at least one distinct variant")
 experiments = parse_experiments(parsed["experiments"])
+!isempty(experiments) && length(unique(experiments)) == length(experiments) || error("Select at least one distinct experiment")
 
 # ---- Visible device count ----
 function visible_device_count()
@@ -117,25 +154,51 @@ specs = [GeneralizationSpec(exp,rep;
     Rmax=parsed["Rmax"],
     Ng=something(parsed["Ng"], exp in GeneralizationVariants.GEOMETRY_EXPERIMENTS ?
       GeneralizationVariants.GeometryExperiments.GeneralizationGeometry.jeet_controls(exp).ng : 31),
-    n_per_region=parsed["n-per-region"], maxiters=parsed["maxiters"])
+    n_per_region=parsed["n-per-region"], maxiters=parsed["maxiters"],config=job_config(rep,exp))
     for rep in reps for exp in experiments]
+
+# Resolve experiment-dependent defaults before persisting or displaying the configuration.
+for spec in specs
+  spec.config["data"]["n_per_region"] = spec.n_per_region
+end
 
 # ---- Build jobs + run ----
 if parsed["dry-run"]
   for spec in specs
-    println(spec.name, " / ", spec.representation, " / iterations=", spec.maxiters,
+    println(spec.name, " / ", spec.representation, " / weighting=", spec.coefficient_weighting, " / iterations=", spec.maxiters,
             " / points_per_patch_or_region=", spec.n_per_region)
   end
   println("Total experiment/variant jobs: ", length(specs))
   exit(0)
 end
-isdir(parsed["output-root"]) && !isempty(readdir(parsed["output-root"])) &&
-  error("Output root is not empty; choose a new --output-root to preserve previous runs")
-mkpath(parsed["output-root"])
-jobs = build_gen_jobs(specs, parsed["output-root"])
-
-@info "Built jobs" n_jobs=length(jobs) output_root=parsed["output-root"]
-
-run_generalization_variants(jobs)
-
-@info "Generalization variants run complete" output_root=parsed["output-root"]
+# Persist every resolved job, including geometry-specific defaults.
+base_config["jobs"] = [Dict("experiment"=>String(s.name),"variant"=>String(s.variant),
+  "regions"=>String.(s.regions),"Rmax"=>s.Rmax,"Ng"=>s.Ng,"n_per_region"=>s.n_per_region,"config"=>s.config) for s in specs]
+run = RunManagement.create_run(base_config; root=base_config["run"]["root"], date=Date(parsed["date"]), output=parsed["output-root"])
+jobs = build_gen_jobs(specs,joinpath(run.root,"jobs"))
+println("Training output: ",run.root)
+println("Report directory: ",joinpath(run.root,"report"))
+failed=false
+RunManagement.with_run_logging(run) do
+  try
+    run_generalization_variants(jobs; run=run)
+  catch e
+    global failed = true
+    @error "Run did not complete successfully" exception=(e, catch_backtrace())
+  end
+  if parsed["report"]
+    python = get(ENV, "STUDY_PYTHON", "")
+    exporter = isempty(python) ? `uv run` : Cmd([python])
+    try
+      Base.run(`$exporter scripts/charts/export_dual_study.py --date $(parsed["date"]) --output $(joinpath(run.root,"report")) --geometry-root $(joinpath(run.root,"jobs"))`)
+      run.manifest["report_status"] = "completed"
+    catch e
+      global failed = true
+      run.manifest["report_status"] = "failed"
+      @error "Report export failed; training artifacts retained" exception=(e, catch_backtrace())
+    end
+    RunManagement.persist!(run)
+  end
+end
+println("Run status: ",run.manifest["status"],"; output: ",run.root)
+failed && exit(1)

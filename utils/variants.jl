@@ -23,18 +23,39 @@
 
 module Variants
 
-include("../architectures/PINN.jl")
+if isdefined(parentmodule(@__MODULE__), :PINN)
+  import ..PINN
+else
+  include("../architectures/PINN.jl")
+end
 using .PINN
 
-include("../utils/tui.jl")
+if isdefined(parentmodule(@__MODULE__), :TUI)
+  import ..TUI
+else
+  include("../utils/tui.jl")
+end
 using .TUI
 
-include("../utils/helper_funcs.jl")
+if isdefined(parentmodule(@__MODULE__), :helper_funcs)
+  import ..helper_funcs
+else
+  include("../utils/helper_funcs.jl")
+end
 using .helper_funcs
 
-include("../utils/plugboard.jl")
+if isdefined(parentmodule(@__MODULE__), :Plugboard)
+  import ..Plugboard
+else
+  include("../utils/plugboard.jl")
+end
 using .Plugboard
 
+if isdefined(parentmodule(@__MODULE__), :RunManagement)
+  import ..RunManagement
+else
+  include("run_management.jl")
+end
 using CUDA
 using JSON
 using Dates
@@ -63,14 +84,17 @@ struct VariantSpec
   neuron_count::Int
   maxiters::Int
   seed_offset::Int
+  model::PINN.ModelConfig
+  loss::PINN.LossConfig
 end
 
 function VariantSpec(name::AbstractString, representation::Symbol;
                      N::Int=20, neuron_count::Int=64, maxiters::Int=3000,
-                     seed_offset::Int=0)
+                     seed_offset::Int=0, model=PINN.ModelConfig(hidden_widths=fill(neuron_count,3)),
+                     loss=PINN.LossConfig(coefficient_weighting=PINN.coefficient_weighting(representation)))
   representation in (:power_series, :eigenvalue, :power_series_variation) || error(
     "VariantSpec: representation must be :power_series, :eigenvalue or :power_series_variation, got :$representation")
-  return VariantSpec(String(name), representation, N, neuron_count, maxiters, seed_offset)
+  return VariantSpec(String(name), PINN.canonical_representation(representation), N, neuron_count, maxiters, seed_offset,model,loss)
 end
 
 # ---------------------------------------------------------------------------
@@ -188,28 +212,15 @@ The board is created once with one row per visible device; updates are
 serialized by the board's lock. The function blocks until all jobs finish.
 """
 function run_staged_variants(jobs::AbstractVector{VariantJob};
-                             benchmark_dataset::Union{Dict,Nothing}=nothing)
+                             benchmark_dataset::Union{Dict,Nothing}=nothing, run=nothing)
   devs = device_names()
   max_iter = isempty(jobs) ? 10000 : jobs[1].spec.maxiters
   board = TUI.GPUBoard(devs; max_iter=max_iter)
 
-  tasks = Task[]
-  for (slot, job) in enumerate(jobs)
-    push!(tasks, Threads.@spawn begin
-      try
-        if CUDA.functional()
-          CUDA.device!(job.device_id - 1)        # 0-indexed for CUDA.jl
-        end
-        _run_one_job!(board, job, benchmark_dataset)
-      catch e
-        @error "Variant $(job.tag) failed on device $(job.device_id)" exception=(e, catch_backtrace())
-        TUI.update!(board, job.device_id; variant=string(job.tag, " FAILED"))
-      end
-    end)
+  return RunManagement.run_jobs(jobs; run=run, devices=length(devs)) do job
+    CUDA.functional() && CUDA.device!(job.device_id-1)
+    _run_one_job!(board,job,benchmark_dataset)
   end
-  foreach(fetch, tasks)
-
-  return jobs
 end
 
 # Worker body — kept private; called inside a task spawned by run_staged_variants.
@@ -252,6 +263,7 @@ function _run_one_job!(board::TUI.GPUBoard, job::VariantJob,
       "objective_components" => "pde + supervised",
       "diagnostic_components" => "bc",
       "variant_name" => job.tag,
+      "coefficient_weighting" => String(settings.loss.coefficient_weighting),
     )
   )
 
@@ -275,7 +287,7 @@ function _build_settings(job::VariantJob)
     22,                                 # num_points (≥ N+1)
     Float32(0.0), Float32(1.0),
     Float32(1.0), Float32(1.0),         # supervised / pde weights
-    xs, "adam", job.spec.representation,
+    xs, "adam", job.spec.representation, :coefficients; model=job.spec.model,loss=job.spec.loss,
   )
 end
 
@@ -295,6 +307,9 @@ function write_manifest(path::AbstractString, jobs::AbstractVector{VariantJob},
     Dict(
       "tag" => j.tag,
       "representation" => String(j.spec.representation),
+      "coefficient_weighting" => String(j.spec.loss.coefficient_weighting),
+      "hidden_widths" => j.spec.model.hidden_widths,
+      "activation" => String(j.spec.model.activation),
       "N" => j.spec.N,
       "neuron_count" => j.spec.neuron_count,
       "maxiters" => j.spec.maxiters,

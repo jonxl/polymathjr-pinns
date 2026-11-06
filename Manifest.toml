@@ -2,7 +2,7 @@
 
 julia_version = "1.12.7"
 manifest_format = "2.0"
-project_hash = "bd0d317920adfb541eb70ef0b1ac35ca735cab65"
+project_hash = "842f8006c02c1c19b65dd37b95f9956573bdb25a"
 
 [[deps.ADTypes]]
 deps = ["PrecompileTools"]
@@ -2699,6 +2699,12 @@ weakdeps = ["StatsBase"]
 
     [deps.PDMats.extensions]
     StatsBaseExt = "StatsBase"
+
+[[deps.PINNStudies]]
+deps = ["ArgParse", "CSV", "CUDA", "ComponentArrays", "DataFrames", "Dates", "GLMakie", "IntervalSets", "JSON", "LinearAlgebra", "Logging", "Lux", "Mmap", "ModelingToolkit", "NeuralPDE", "Optimization", "OptimizationOptimJL", "OptimizationOptimisers", "PlotlyJS", "Plots", "ProgressMeter", "Random", "SHA", "Serialization", "Statistics", "TOML", "TaylorSeries", "Term", "UUIDs", "WebSockets", "Zygote"]
+path = "."
+uuid = "6d477918-9fbe-4d31-a5f9-b4c89f3ea580"
+version = "0.1.0"
 
 [[deps.PNGFiles]]
 deps = ["Base64", "CEnum", "ImageCore", "IndirectArrays", "OffsetArrays", "libpng_jll"]

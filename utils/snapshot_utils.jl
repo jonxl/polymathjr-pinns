@@ -4,13 +4,25 @@ using ComponentArrays
 using Lux
 import Random
 
-include("../utils/safetensors_utils.jl")
+if isdefined(parentmodule(@__MODULE__), :SafeTensorSnapshots)
+  import ..SafeTensorSnapshots
+else
+  include("../utils/safetensors_utils.jl")
+end
 using .SafeTensorSnapshots
 
-include("../utils/helper_funcs.jl")
+if isdefined(parentmodule(@__MODULE__), :helper_funcs)
+  import ..helper_funcs
+else
+  include("../utils/helper_funcs.jl")
+end
 using .helper_funcs
 
-include("../utils/loss_functions.jl")
+if isdefined(parentmodule(@__MODULE__), :loss_functions)
+  import ..loss_functions
+else
+  include("../utils/loss_functions.jl")
+end
 using .loss_functions
 
 """

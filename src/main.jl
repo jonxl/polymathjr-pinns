@@ -4,23 +4,24 @@ using JSON
 using CSV
 using DataFrames
 
-# Include util functions
-include("../utils/plugboard.jl")
+# Shared package modules (legacy CLI preserved)
+using PINNStudies
+using PINNStudies: Plugboard
 using .Plugboard
 
-include("../utils/ProgressBar.jl")
+using PINNStudies: ProgressBar
 using .ProgressBar
 
-include("../utils/helper_funcs.jl")
+using PINNStudies: helper_funcs
 using .helper_funcs
 
-include("../utils/two_d_grid_search_hyperparameters.jl")
+using PINNStudies: TwoDGridSearchOnWeights
 using .TwoDGridSearchOnWeights
 
-include("../architectures/PINN.jl")
+using PINNStudies: PINN
 using .PINN
 
-include("../utils/training_schemes.jl")
+using PINNStudies: training_schemes
 using .training_schemes
 
 # Dataset file paths

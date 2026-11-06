@@ -1,6 +1,10 @@
 module GeometryExperiments
 using JSON, CUDA, SHA, Statistics, Random
-include("experiments.jl")
+if isdefined(parentmodule(@__MODULE__), :Experiments)
+  import ..Experiments
+else
+  include("experiments.jl")
+end
 using .Experiments
 using .Experiments.PanelSpec
 include("geometry_comparison.jl")
@@ -22,7 +26,7 @@ end
 # A representation may join an experiment only with the same equations and controls.
 function ensure_contract(root, spec, cfg, nx)
     contract=Dict("design"=>spec,"power_series_degree"=>cfg.N,
-        "network_hidden_width"=>cfg.neuron_count,"model_seed"=>cfg.seed,
+        "network_hidden_width"=>cfg.neuron_count,"hidden_widths"=>cfg.model.hidden_widths,"activation"=>String(cfg.model.activation),"model_seed"=>cfg.seed,
         "adam_iterations"=>cfg.maxiters,"collocation_points"=>cfg.num_points,
         "x_left"=>cfg.x_left,"x_right"=>cfg.x_right,"solution_points"=>nx,
         "pde_weight"=>cfg.pde_weight,"supervised_weight"=>cfg.supervised_weight,
@@ -153,7 +157,7 @@ legacy scripts' Adam/LBFGS floor objective. Saves convergence evidence per model
 function run_geometry(cfg::ExperimentConfig,name::Symbol; output_root="results/geometry",
                       ng=nothing,ntest=nothing,placements=0,batch_size=1024,nx=200)
     cfg.maxiters > 0 || error("Training iterations must be positive")
-    spec=design(name;n=cfg.n_per_region,ng,ntest,placements,seed=cfg.seed)
+    spec=design(name;n=cfg.n_per_region,ng,ntest,placements,seed=cfg.data_seed)
     dir=joinpath(output_root,String(name),String(cfg.representation))
     ispath(joinpath(dir,"results.json")) && error("Results already exist: $dir")
     digest=ensure_contract(dirname(dir),spec,cfg,nx)
@@ -192,6 +196,10 @@ function run_geometry(cfg::ExperimentConfig,name::Symbol; output_root="results/g
             "source_commit"=>"bb2a102a","design_sha256"=>digest,"models"=>results))
     end
     finish_panels(dir,spec,results,cfg.representation,digest)
+    ps=load_experiment(joinpath(dir,"panelset.json"))
+    ps.meta["representation"]=String(Experiments.PINN.canonical_representation(cfg.representation))
+    ps.meta["coefficient_weighting"]=String(cfg.loss.coefficient_weighting)
+    save_experiment(joinpath(dir,"panelset.json"),ps)
     results
 end
 

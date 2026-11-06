@@ -8,11 +8,23 @@ using Random
 using SHA
 using Serialization
 
-include("../architectures/PINN.jl")
+if isdefined(parentmodule(@__MODULE__), :PINN)
+  import ..PINN
+else
+  include("../architectures/PINN.jl")
+end
 using .PINN
-include("dual_dataset.jl")
+if isdefined(parentmodule(@__MODULE__), :DualDataset)
+  import ..DualDataset
+else
+  include("dual_dataset.jl")
+end
 using .DualDataset
-include("plugboard.jl")
+if isdefined(parentmodule(@__MODULE__), :Plugboard)
+  import ..Plugboard
+else
+  include("plugboard.jl")
+end
 using .Plugboard
 
 const LF = PINN.loss_functions
@@ -130,7 +142,7 @@ function evaluate_checkpoint(path::AbstractString, representation::Symbol,
                              region::Union{Symbol,Nothing}=nothing,
                              batch_size::Int=16_384, use_gpu::Bool=CUDA.functional())
   net, params, state, metadata = PINN.SafeTensorSnapshots.load_any_model(path)
-  Symbol(metadata["representation"]) === representation ||
+  PINN.canonical_representation(Symbol(metadata["representation"])) === PINN.canonical_representation(representation) ||
     error("Representation mismatch in $path")
   settings = _settings(representation, split, region, config)
   params_device = use_gpu ? CUDA.cu(params) : params
@@ -153,9 +165,9 @@ function evaluate_checkpoint(path::AbstractString, representation::Symbol,
     output = first(net(buffers.X, params_device, state_device))
     pde, bc, sup = representation === :eigenvalue ?
       LF.batched_eigenvalue_losses(output, buffers) :
-      LF.batched_power_series_losses(output, buffers; variation=representation === :power_series_variation)
+      LF.batched_power_series_losses(output, buffers; variation=get(metadata,"coefficient_weighting",String(PINN.coefficient_weighting(representation))) == "descending")
     predicted = LF.batched_reconstruct(output, buffers)
-    truth = LF.true_solutions(buffers)
+    truth = LF.analytic_solutions(buffers,settings.xs)
     n = length(items)
     numerator += _host_scalar(sum(abs2, predicted .- truth))
     denominator += _host_scalar(sum(abs2, truth))
@@ -179,7 +191,7 @@ function evaluate_dataset_checkpoint(path::AbstractString, representation::Symbo
                                      use_gpu::Bool=CUDA.functional())
   isempty(dataset) && error("Cannot evaluate an empty dataset")
   net, params, state, metadata = PINN.SafeTensorSnapshots.load_any_model(path)
-  Symbol(metadata["representation"]) === representation ||
+  PINN.canonical_representation(Symbol(metadata["representation"])) === PINN.canonical_representation(representation) ||
     error("Representation mismatch in $path")
   settings = _settings(representation, Dict(first(dataset)), config)
   params_device = use_gpu ? CUDA.cu(params) : params
@@ -192,9 +204,9 @@ function evaluate_dataset_checkpoint(path::AbstractString, representation::Symbo
   output = first(net(buffers.X, params_device, state_device))
   pde, bc, sup = representation === :eigenvalue ?
     LF.batched_eigenvalue_losses(output, buffers) :
-    LF.batched_power_series_losses(output, buffers; variation=representation === :power_series_variation)
+    LF.batched_power_series_losses(output, buffers; variation=get(metadata,"coefficient_weighting",String(PINN.coefficient_weighting(representation))) == "descending")
   predicted = LF.batched_reconstruct(output, buffers)
-  truth = LF.true_solutions(buffers)
+  truth = LF.analytic_solutions(buffers,settings.xs)
   predicted_cpu = Array(predicted)
   truth_cpu = Array(truth)
   errors = [LF.relative_l2(predicted_cpu[:, i], truth_cpu[:, i])

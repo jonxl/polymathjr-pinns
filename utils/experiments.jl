@@ -32,13 +32,25 @@ module Experiments
 using Random
 using Statistics: mean
 
-include("../architectures/PINN.jl")
+if isdefined(parentmodule(@__MODULE__), :PINN)
+  import ..PINN
+else
+  include("../architectures/PINN.jl")
+end
 using .PINN
 
-include("plugboard.jl")
+if isdefined(parentmodule(@__MODULE__), :Plugboard)
+  import ..Plugboard
+else
+  include("plugboard.jl")
+end
 using .Plugboard
 
-include("../viz/PanelSpec.jl")
+if isdefined(parentmodule(@__MODULE__), :PanelSpec)
+  import ..PanelSpec
+else
+  include("../viz/PanelSpec.jl")
+end
 using .PanelSpec
 
 const LF = PINN.loss_functions
@@ -90,6 +102,12 @@ struct ExperimentConfig
   pde_weight::Float32
   seed::Int
   checkpoint_interval::Int
+  model::PINN.ModelConfig
+  loss::PINN.LossConfig
+  batch_size::Int
+  metrics_interval::Int
+  input_encoding::Symbol
+  data_seed::Int
 end
 
 function ExperimentConfig(; representation::Symbol=:power_series, N::Int=20,
@@ -99,11 +117,17 @@ function ExperimentConfig(; representation::Symbol=:power_series, N::Int=20,
                             supervised_weight::Float32=1.0f0,
                             pde_weight::Float32=1.0f0,
                             seed::Int=1234,
-                            checkpoint_interval::Int=0)
+                            checkpoint_interval::Int=0,
+                            model=PINN.ModelConfig(hidden_widths=fill(neuron_count,3)),
+                            loss=PINN.LossConfig(coefficient_weighting=PINN.coefficient_weighting(representation)),
+                            batch_size::Int=0, metrics_interval::Int=100, input_encoding::Symbol=:coefficients, data_seed::Int=seed)
+  input_encoding in (:coefficients,:trace_determinant) || error("Unknown input encoding")
   checkpoint_interval >= 0 || error("checkpoint_interval must be non-negative")
+  maxiters > 0 && batch_size >= 0 && metrics_interval > 0 || error("Invalid training limits")
+  1 <= N <= 40 && num_points > 0 && x_left < x_right || error("Invalid degree or collocation interval")
   return ExperimentConfig(representation, N, neuron_count, maxiters, n_per_region,
                           num_points, x_left, x_right, supervised_weight,
-                          pde_weight, seed, checkpoint_interval)
+                          pde_weight, seed, checkpoint_interval, model, loss, batch_size, metrics_interval, input_encoding, data_seed)
 end
 
 # Build PINNSettings for a dataset under a config. `seed_offset` keeps the
@@ -111,7 +135,7 @@ end
 function settings_for(cfg::ExperimentConfig, dataset::Dict;
                       seed_offset::Int=0, neuron_count::Union{Int,Nothing}=nothing,
                       N::Union{Int,Nothing}=nothing,
-                      input_encoding::Symbol=:coefficients)
+                      input_encoding::Symbol=cfg.input_encoding)
   Nv = something(N, cfg.N)
   xs = collect(range(cfg.x_left, cfg.x_right, length=cfg.num_points))
   return PINNSettings(
@@ -122,7 +146,8 @@ function settings_for(cfg::ExperimentConfig, dataset::Dict;
     Nv, Nv + 1, cfg.num_points,
     cfg.x_left, cfg.x_right,
     cfg.supervised_weight, cfg.pde_weight,
-    xs, "adam", cfg.representation, input_encoding,
+    xs, "adam", cfg.representation, input_encoding;
+    model=neuron_count === nothing ? cfg.model : PINN.ModelConfig(hidden_widths=fill(neuron_count,length(cfg.model.hidden_widths)), activation=cfg.model.activation), loss=cfg.loss,
   )
 end
 
@@ -149,16 +174,18 @@ function evaluate_on(p, net, st, settings::PINNSettings, dataset::Dict)
   out = first(net(buf.X, p, st))
   pde, bc, sup = settings.representation === :eigenvalue ?
     LF.batched_eigenvalue_losses(out, buf) :
-    LF.batched_power_series_losses(out, buf; variation=settings.representation === :power_series_variation)
-  relerr = LF.relative_l2(LF.batched_reconstruct(out, buf), LF.true_solutions(buf))
-  return (pde=Float32(pde), bc=Float32(bc), sup=Float32(sup), relerr=relerr)
+    LF.batched_power_series_losses(out, buf; variation=settings.loss.coefficient_weighting === :descending)
+  relerr = LF.relative_l2(LF.batched_reconstruct(out, buf), LF.analytic_solutions(buf,settings.xs))
+  truncation = settings.representation === :power_series ?
+    LF.relative_l2(LF.truncated_solutions(buf), LF.analytic_solutions(buf,settings.xs)) : nothing
+  return (pde=Float32(pde), bc=Float32(bc), sup=Float32(sup), relerr=relerr, truncation_error=truncation)
 end
 
 # Train one model on a dataset, returning params + the loss history.
 # History is captured per iteration so Shape A can chart convergence.
 function train_one(cfg::ExperimentConfig, dataset::Dict, tag::String;
                    seed_offset::Int=0, neuron_count=nothing, N=nothing,
-                   input_encoding::Symbol=:coefficients,
+                   input_encoding::Symbol=cfg.input_encoding,
                    output_root::String="results")
   settings = settings_for(cfg, dataset; seed_offset=seed_offset,
                           neuron_count=neuron_count, N=N, input_encoding=input_encoding)
@@ -172,6 +199,7 @@ function train_one(cfg::ExperimentConfig, dataset::Dict, tag::String;
       representation=cfg.representation, iteration=iteration,
       extra_metadata=Dict{String,Any}(
         "objective_components" => "pde + supervised",
+        "coefficient_weighting" => String(settings.loss.coefficient_weighting),
         "diagnostic_components" => "bc",
         "experiment_tag" => tag,
         "input_encoding" => String(settings.input_encoding),
@@ -186,18 +214,29 @@ function train_one(cfg::ExperimentConfig, dataset::Dict, tag::String;
     @warn "Saved interrupted checkpoint" path iteration
   end
   checkpoint_callback = cfg.checkpoint_interval > 0 ? save_intermediate : nothing
-  p, net, st, _, _ = train_pinn(settings, dir; run_id=tag,
+  result = train_pinn(settings, dir; run_id=tag,
                                 write_loss_csv=true,
                                 on_milestone=checkpoint_callback,
                                 on_interrupt=save_interrupted,
-                                snapshot_epoch_interval=cfg.checkpoint_interval)
+                                snapshot_epoch_interval=cfg.checkpoint_interval, batch_size=cfg.batch_size, metrics_interval=cfg.metrics_interval)
+  result.status === :completed || throw(InterruptException())
+  p, net, st, _, _ = result
   PINN.SafeTensorSnapshots.save_checkpoint(joinpath(dir, "model.checkpoint"), p, net, settings.seed;
     representation=cfg.representation,
     extra_metadata=Dict{String,Any}(
       "objective_components" => "pde + supervised",
+        "coefficient_weighting" => String(settings.loss.coefficient_weighting),
       "diagnostic_components" => "bc",
       "input_encoding" => String(settings.input_encoding),
     ))
+  accuracy = evaluate_on(p, net, st, settings, dataset)
+  open(joinpath(dir,"approximation.json"),"w") do io
+    PINN.JSON.print(io,Dict("reference"=>"analytic_solution", "evaluation_domain"=>"training equations",
+      "degree"=>settings.n_terms_for_power_series,"representation"=>String(settings.representation),
+      "coefficient_weighting"=>String(settings.loss.coefficient_weighting),
+      "learned_solution_error"=>accuracy.relerr,"truncation_error"=>accuracy.truncation_error,
+      "x_left"=>settings.x_left,"x_right"=>settings.x_right,"num_points"=>settings.num_points),2)
+  end
   return (p=p, net=net, st=st, settings=settings, dir=dir)
 end
 
@@ -239,7 +278,7 @@ function run_single(cfg::ExperimentConfig, dataset::Dict, name::String;
   buf = buffers_for(r.settings, eval_set)
   out = first(r.net(buf.X, r.p, r.st))
   U = LF.batched_reconstruct(out, buf)
-  UT = LF.true_solutions(buf)
+  UT = LF.analytic_solutions(buf,r.settings.xs)
   xs = collect(range(cfg.x_left, cfg.x_right, length=cfg.num_points))
 
   # First few ODEs, so the solution panel stays legible.
@@ -270,7 +309,8 @@ function run_single(cfg::ExperimentConfig, dataset::Dict, name::String;
 
   m = evaluate_on(r.p, r.net, r.st, r.settings, eval_set)
   return PanelSet("$name ($(cfg.representation))",
-    Dict{String,Any}("representation" => String(cfg.representation),
+    Dict{String,Any}("representation" => String(PINN.canonical_representation(cfg.representation)),
+      "coefficient_weighting" => String(cfg.loss.coefficient_weighting),
                      "shape" => "single", "n_odes" => length(dataset),
                      "relerr" => m.relerr, "run_dir" => r.dir),
     panels)
@@ -294,19 +334,29 @@ function run_sweep(cfg::ExperimentConfig, dataset::Dict, param::Symbol,
   param in (:neuron_count, :N) || error(
     "run_sweep: param must be :neuron_count or :N, got :$param")
 
-  relerrs = Float64[]; pdes = Float64[]; bcs = Float64[]; sups = Float64[]
+  if param === :N
+    all(length(v) >= maximum(values)+1 for v in Base.values(dataset)) || error("Degree sweep requires target coefficients through the largest requested N")
+  end
+  relerrs = Float64[]; pdes = Float64[]; bcs = Float64[]; sups = Float64[]; truncations=Float64[]
   for (i, v) in enumerate(values)
     kw = param === :neuron_count ? (neuron_count=v, N=nothing) : (neuron_count=nothing, N=v)
     r = train_one(cfg, dataset, "$(name)-$(cfg.representation)-$(param)$(v)";
                   seed_offset=i, kw..., output_root=output_root)
     m = evaluate_on(r.p, r.net, r.st, r.settings, dataset)
     push!(relerrs, m.relerr); push!(pdes, m.pde); push!(bcs, m.bc); push!(sups, m.sup)
+    if m.truncation_error === nothing
+      # Use the same polynomial reference in both representation panels.
+      reference_buf = LF.precompute_batch_buffers(r.settings, collect(dataset), false, identity)
+      push!(truncations, LF.relative_l2(LF.truncated_solutions(reference_buf), LF.analytic_solutions(reference_buf,r.settings.xs)))
+    else
+      push!(truncations,m.truncation_error)
+    end
   end
 
   xv = Float64.(values)
   panels = Panel[
     lines_panel("sweep_relerr", "Solution rel-L2 vs $param ($(cfg.representation))",
-                [("rel L2", xv, relerrs)];
+                [("Learned solution error", xv, relerrs),("Power-series truncation reference",xv,truncations)];
                 xlabel=String(param), ylabel="relative L2", log_y=true),
     lines_panel("sweep_components", "Loss components vs $param",
                 [("pde", xv, pdes), ("bc", xv, bcs), ("supervised", xv, sups)];
@@ -314,7 +364,8 @@ function run_sweep(cfg::ExperimentConfig, dataset::Dict, param::Symbol,
   ]
 
   return PanelSet("$name sweep over $param ($(cfg.representation))",
-    Dict{String,Any}("representation" => String(cfg.representation),
+    Dict{String,Any}("representation" => String(PINN.canonical_representation(cfg.representation)),
+      "coefficient_weighting" => String(cfg.loss.coefficient_weighting),
                      "shape" => "sweep", "param" => String(param),
                      "values" => values),
     panels)
@@ -340,7 +391,7 @@ rather than hours.
 """
 function run_transfer(cfg::ExperimentConfig, train_regions::Vector{Symbol},
                       test_regions::Vector{Symbol}, name::String;
-                      output_root::String="results", rng_seed::Int=1234)
+                      output_root::String="results", rng_seed::Int=cfg.data_seed)
   nr, nc = length(train_regions), length(test_regions)
 
   # Test sets are fixed up front so every model is judged on identical data.
@@ -396,7 +447,8 @@ function run_transfer(cfg::ExperimentConfig, train_regions::Vector{Symbol},
     annotations=[["", "", ""], ratios]))
 
   return PanelSet("$name transfer ($(cfg.representation))",
-    Dict{String,Any}("representation" => String(cfg.representation),
+    Dict{String,Any}("representation" => String(PINN.canonical_representation(cfg.representation)),
+      "coefficient_weighting" => String(cfg.loss.coefficient_weighting),
                      "shape" => "transfer",
                      "train_regions" => rl, "test_regions" => cl,
                      "n_per_region" => cfg.n_per_region),
@@ -416,7 +468,7 @@ in a grid.
 """
 function run_extrapolate(cfg::ExperimentConfig, regions::Vector{Symbol},
                          Rmax::Int, name::String;
-                         output_root::String="results", rng_seed::Int=1234)
+                         output_root::String="results", rng_seed::Int=cfg.data_seed)
   n_reg = length(regions)
   shell_n = max(5, cfg.n_per_region ÷ 4)  # fewer ODEs per shell (fast eval)
   rng = MersenneTwister(rng_seed)
@@ -449,7 +501,8 @@ function run_extrapolate(cfg::ExperimentConfig, regions::Vector{Symbol},
     log_y=true)]
 
   return PanelSet("$name extrapolation ($(cfg.representation))",
-    Dict{String,Any}("representation" => String(cfg.representation),
+    Dict{String,Any}("representation" => String(PINN.canonical_representation(cfg.representation)),
+      "coefficient_weighting" => String(cfg.loss.coefficient_weighting),
                      "shape" => "extrapolate", "Rmax" => Rmax,
                      "regions" => String.(regions)),
     lines_panels)
@@ -471,7 +524,7 @@ function run_cross_region_range(cfg::ExperimentConfig,
                                 test_regions::Vector{Symbol},
                                 Rmax::Int, name::String;
                                 output_root::String="results",
-                                rng_seed::Int=1234)
+                                rng_seed::Int=cfg.data_seed)
   shell_n = max(5, cfg.n_per_region ÷ 4)
   rng = MersenneTwister(rng_seed)
 
@@ -504,7 +557,8 @@ function run_cross_region_range(cfg::ExperimentConfig,
   end
 
   return PanelSet("$name cross-region range ($(cfg.representation))",
-    Dict{String,Any}("representation" => String(cfg.representation),
+    Dict{String,Any}("representation" => String(PINN.canonical_representation(cfg.representation)),
+      "coefficient_weighting" => String(cfg.loss.coefficient_weighting),
                      "shape" => "cross_region_range", "Rmax" => Rmax,
                      "train_regions" => String.(train_regions),
                      "test_regions" => String.(test_regions)),
@@ -523,7 +577,7 @@ then test 6 scenarios and produce solution-curve overlays + grouped bar of
 rel-L2 per scenario.
 """
 function run_showcase(cfg::ExperimentConfig, name::String;
-                      output_root::String="results", rng_seed::Int=1234)
+                      output_root::String="results", rng_seed::Int=cfg.data_seed)
   exp_regions = [:saddle, :stable_node, :unstable_node]
   rng = MersenneTwister(rng_seed)
 
@@ -554,7 +608,7 @@ function run_showcase(cfg::ExperimentConfig, name::String;
     buf = buffers_for(r.settings, ds)
     out = first(r.net(buf.X, r.p, r.st))
     U = LF.batched_reconstruct(out, buf)
-    UT = LF.true_solutions(buf)
+    UT = LF.analytic_solutions(buf,r.settings.xs)
     err = LF.relative_l2(U[:, 1], UT[:, 1])
     push!(bar_data, err)
     push!(sol_curves, ("$label true", xs, collect(UT[:, 1])))
@@ -577,7 +631,8 @@ function run_showcase(cfg::ExperimentConfig, name::String;
       ylabel="solution rel-L2", log_y=true))
 
   return PanelSet("$name showcase ($(cfg.representation))",
-    Dict{String,Any}("representation" => String(cfg.representation),
+    Dict{String,Any}("representation" => String(PINN.canonical_representation(cfg.representation)),
+      "coefficient_weighting" => String(cfg.loss.coefficient_weighting),
                      "shape" => "showcase"),
     curve_panels)
 end
@@ -614,7 +669,7 @@ end
 function run_gen_radius(cfg::ExperimentConfig, name::String;
                         mode::Symbol=:disk,
                         output_root::String="results",
-                        rng_seed::Int=1234,
+                        rng_seed::Int=cfg.data_seed,
                         eps_levels::Vector{Float32}=Float32[1e-4, 1e-3, 1e-2, 1e-1, 1e0, 1e1],
                         eps_tol::Float64=0.10,
                         Lmap::Float32=4.0f0, Ng::Int=81)
@@ -650,7 +705,7 @@ function run_gen_radius(cfg::ExperimentConfig, name::String;
     buf = buffers_for(r.settings, grid_set)
     out = first(r.net(buf.X, r.p, r.st))
     U_grid = LF.batched_reconstruct(out, buf)
-    UT_grid = LF.true_solutions(buf)
+    UT_grid = LF.analytic_solutions(buf,r.settings.xs)
 
     # Build error matrix
     err_map = zeros(Float32, Ng, Ng)
@@ -696,7 +751,7 @@ function run_gen_radius(cfg::ExperimentConfig, name::String;
       buf = buffers_for(rr.settings, grid_set)
       out = first(rr.net(buf.X, rr.p, rr.st))
       U_grid = LF.batched_reconstruct(out, buf)
-      UT_grid = LF.true_solutions(buf)
+      UT_grid = LF.analytic_solutions(buf,rr.settings.xs)
 
       # Compute area at every ε level — one pass over the grid suffices.
       cell_area = (2Lmap / (Ng - 1))^2
@@ -739,7 +794,8 @@ function run_gen_radius(cfg::ExperimentConfig, name::String;
   end
 
   return PanelSet("$name gen-radius $(mode) ($(cfg.representation))",
-    Dict{String,Any}("representation" => String(cfg.representation),
+    Dict{String,Any}("representation" => String(PINN.canonical_representation(cfg.representation)),
+      "coefficient_weighting" => String(cfg.loss.coefficient_weighting),
                      "shape" => "gen_radius", "mode" => String(mode),
                      "eps_levels" => collect(eps_levels),
                      "Lmap" => Lmap, "Ng" => Ng),

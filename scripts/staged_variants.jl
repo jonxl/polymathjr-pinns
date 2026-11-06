@@ -25,7 +25,8 @@ using Random
 include("../utils/plugboard.jl")
 using .Plugboard
 
-include("../utils/variants.jl")
+using PINNStudies
+using PINNStudies: Variants, RunManagement
 using .Variants
 
 function parse_commandline()
@@ -51,7 +52,7 @@ function parse_commandline()
     "--output-root"
       help = "Root directory for staged results; build_jobs adds a 'staged-<tag>' subdir per variant"
       arg_type = String
-      default = joinpath("results", Dates.format(now(), "mm-dd-yy-HHMM"))
+      default = nothing
     "--seed"
       help = "Base RNG seed for dataset + per-variant seeds"
       arg_type = Int
@@ -86,14 +87,15 @@ specs = build_specs(parsed)
 @info "Staged variant run" specs=specs output_root=parsed["output-root"] n_devices=length(device_names())
 
 # ---- Generate shared dataset ----
-mkpath(parsed["output-root"])
+run_context=RunManagement.create_run(Dict("launch"=>Dict(k=>v for (k,v) in parsed if v !== nothing)); output=parsed["output-root"])
+parsed["output-root"]=run_context.root
 dataset = generate_shared_dataset(n_per_region=parsed["n-per-region"],
                                   num_terms=21,
                                   seed=parsed["seed"])
 
 # ---- Build jobs + write manifest ----
 jobs = build_jobs(specs, dataset, parsed["output-root"])
-manifest_path = joinpath(parsed["output-root"], "manifest.json")
+manifest_path = joinpath(parsed["output-root"], "jobs.json")
 write_manifest(manifest_path, jobs, Dict(
     "n_per_region" => parsed["n-per-region"],
     "num_terms" => 21,
@@ -103,6 +105,8 @@ write_manifest(manifest_path, jobs, Dict(
 @info "Manifest written" path=manifest_path n_jobs=length(jobs)
 
 # ---- Run ----
-run_staged_variants(jobs)
+RunManagement.with_run_logging(run_context) do
+    run_staged_variants(jobs;run=run_context)
+end
 
 @info "Staged variant run complete" output_root=parsed["output-root"] manifest=manifest_path

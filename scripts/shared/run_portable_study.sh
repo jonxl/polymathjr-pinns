@@ -10,8 +10,12 @@ set -euo pipefail
 : "${DUAL_MODEL_SEED:=1234}"
 : "${DUAL_BATCH_SIZE:=16384}"
 : "${DUAL_GPU_COUNT:=8}"
-: "${DUAL_STUDY_ROOT:=results/dual-rep-studies/dual-representation-10m}"
 : "${JULIA_BIN:=julia}"
+cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.."
+# An explicit root retains the existing validated restart behavior.
+if [[ -z "${DUAL_STUDY_ROOT:-}" ]]; then
+  DUAL_STUDY_ROOT="$("${JULIA_BIN}" --project=. scripts/shared/new_run_directory.jl)"
+fi
 
 export DUAL_DATASET_SEED DUAL_SHUFFLE_SEED DUAL_MODEL_SEED DUAL_BATCH_SIZE
 export DUAL_GPU_COUNT DUAL_STUDY_ROOT

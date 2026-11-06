@@ -5,19 +5,39 @@ using Plots
 using JSON
 using Dates
 
-include("../architectures/PINN.jl")
+if isdefined(parentmodule(@__MODULE__), :PINN)
+  import ..PINN
+else
+  include("../architectures/PINN.jl")
+end
 using .PINN
 
-include("../utils/helper_funcs.jl")
+if isdefined(parentmodule(@__MODULE__), :helper_funcs)
+  import ..helper_funcs
+else
+  include("../utils/helper_funcs.jl")
+end
 using .helper_funcs
 
-include("../utils/two_d_grid_search_hyperparameters.jl")
+if isdefined(parentmodule(@__MODULE__), :TwoDGridSearchOnWeights)
+  import ..TwoDGridSearchOnWeights
+else
+  include("../utils/two_d_grid_search_hyperparameters.jl")
+end
 using .TwoDGridSearchOnWeights
 
-include("../utils/snapshot_utils.jl")
+if isdefined(parentmodule(@__MODULE__), :SnapshotUtils)
+  import ..SnapshotUtils
+else
+  include("../utils/snapshot_utils.jl")
+end
 using .SnapshotUtils
 
-include("../utils/safetensors_utils.jl")
+if isdefined(parentmodule(@__MODULE__), :SafeTensorSnapshots)
+  import ..SafeTensorSnapshots
+else
+  include("../utils/safetensors_utils.jl")
+end
 using .SafeTensorSnapshots
 
 struct TrainingSchemesSettings

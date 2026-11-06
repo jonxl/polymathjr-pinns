@@ -10,16 +10,32 @@ using Dates
 using DataFrames
 using CSV
 
-include("../architectures/PINN.jl")
+if isdefined(parentmodule(@__MODULE__), :PINN)
+  import ..PINN
+else
+  include("../architectures/PINN.jl")
+end
 using .PINN
 
-include("../utils/gpu_utils.jl")
+if isdefined(parentmodule(@__MODULE__), :GPUUtils)
+  import ..GPUUtils
+else
+  include("../utils/gpu_utils.jl")
+end
 using .GPUUtils
 
-include("../utils/helper_funcs.jl")
+if isdefined(parentmodule(@__MODULE__), :helper_funcs)
+  import ..helper_funcs
+else
+  include("../utils/helper_funcs.jl")
+end
 using .helper_funcs
 
-include("../utils/tui.jl")
+if isdefined(parentmodule(@__MODULE__), :TUI)
+  import ..TUI
+else
+  include("../utils/tui.jl")
+end
 using .TUI
 
 """
