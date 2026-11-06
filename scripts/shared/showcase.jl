@@ -10,7 +10,7 @@ import Random; Random.seed!(1234)
 
 isdir("data") || mkpath("data")
 
-for rep in [:power_series, :eigenvalue]
+for rep in [:power_series, :eigenvalue, :power_series_variation]
     cfg = ExperimentConfig(; representation=rep)
     @info "Running showcase: $rep"
     ps = run_showcase(cfg, "shared_showcase")

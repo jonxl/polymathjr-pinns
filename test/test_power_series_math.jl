@@ -138,3 +138,33 @@ end
         end
     end
 end
+
+@testset "Weighted power-series supervision" begin
+    items = [reshape(Float32[1, 0, 1], 3, 1) => Float32[1, 0, -1, 0, 1]]
+    for K in (1, 3, 5)
+        settings = audit_settings(items; N=4, K=K)
+        raw = last(only(items))
+        A = reshape(raw .+ Float32[1, 2, 3, 4, 5], :, 1)
+        buf = LF.precompute_batch_buffers(settings, items, false, identity)
+        expected = sum((K-i+1) * Float32(i)^2 for i in 1:K) / K
+        loss(C) = LF.batched_power_series_losses(C, buf; variation=true)[3]
+        @test loss(A) ≈ expected
+        gradient = Zygote.gradient(loss, A)[1]
+        @test vec(gradient) ≈ Float32[i <= K ? 2*(K-i+1)*i/K : 0 for i in 1:5]
+        cached = LF.precompute_buffers(settings, false, identity)[first(only(items))]
+        for buffer in (nothing, cached)
+            scalar(C) = LF.generate_loss_supervised_variation(
+                LF.LossFunctionSettings(C, 4, Float32[1,0,1], 0f0, raw[1:2],
+                    settings.xs, settings.num_points, K, raw); ode_buffers=buffer)
+            @test scalar(vec(A)) ≈ expected
+            @test Zygote.gradient(scalar, vec(A))[1] ≈ vec(gradient)
+        end
+        @test LF.batched_power_series_losses(A, LF.select_bin(buf, [1]); variation=true)[3] ≈ expected
+        if CUDA.functional()
+            gpu_buf = LF.precompute_batch_buffers(settings, items, true, cu)
+            gpu_loss(C) = LF.batched_power_series_losses(C, gpu_buf; variation=true)[3]
+            @test gpu_loss(cu(A)) ≈ expected
+            @test Array(Zygote.gradient(gpu_loss, cu(A))[1]) ≈ gradient
+        end
+    end
+end

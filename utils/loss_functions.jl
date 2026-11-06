@@ -33,6 +33,7 @@ struct ODEBuffers{V<:AbstractVector{Float32},M<:AbstractMatrix{Float32}}
   bc2::Float32         # boundary_condition[2] scalar
   padded_data::V       # zero-padded supervised targets (N1,)
   mask::V              # supervised loss mask (N1,)
+  variation_weights::V # K, K-1, …, 1, then zeros
 end
 
 # Pre-compute inverse factorials in Float32 for GPU-compatible loss computation
@@ -110,7 +111,7 @@ function precompute_buffers(settings, use_gpu::Bool, to_device_fn)
     buffers[alpha_matrix_key] = ODEBuffers(
       ode_flat_dev, bc_dev, data_dev, xs_dev,
       W_dev, pow_u_dev, pow_du_dev, bc1, bc2,
-      padded_data_dev, mask_dev
+      padded_data_dev, mask_dev, to_device_fn(Float32[max(K-i+1, 0) for i in 1:N1])
     )
   end
 
@@ -238,6 +239,45 @@ function generate_loss_supervised_value(settings::LossFunctionSettings; ode_buff
   return sum(abs2, diff) / K
 end
 
+"""Linearly weighted coefficient loss: sum((K-n)*abs2(error[n+1])) / K."""
+function generate_loss_supervised_variation(settings::LossFunctionSettings; ode_buffers::Union{ODEBuffers,Nothing}=nothing)
+  K = settings.num_supervised
+  N1 = length(settings.a_vec)
+
+  # Padded data and mask are constant w.r.t. a_vec — keep off AD tape
+  padded_data, mask = Zygote.ignore() do
+    if ode_buffers !== nothing
+      (ode_buffers.padded_data, ode_buffers.mask)
+    else
+      # Fallback: rebuild (used by evaluate_solution / CPU path).
+      # settings.data carries the raw ψ series.
+      d_cpu = Float32.(collect(settings.data))
+      pd_cpu = zeros(Float32, N1)
+      m_cpu = zeros(Float32, N1)
+      pd_cpu[1:min(K, length(d_cpu))] .= d_cpu[1:min(K, length(d_cpu))]
+      m_cpu[1:K] .= 1.0f0
+
+      pd = similar(settings.a_vec)
+      copyto!(pd, pd_cpu)
+      m = similar(settings.a_vec)
+      copyto!(m, m_cpu)
+      (pd, m)
+    end
+  end
+
+  weights = Zygote.ignore() do
+    if ode_buffers !== nothing
+      ode_buffers.variation_weights
+    else
+      w = similar(settings.a_vec)
+      copyto!(w, Float32[max(K-i+1, 0) for i in 1:N1])
+      w
+    end
+  end
+  diff = (settings.a_vec - padded_data) .* mask
+  return sum(abs2.(diff) .* weights) / K
+end
+
 # ===========================================================================
 # BATCHED POWER-SERIES PATH
 # ===========================================================================
@@ -273,6 +313,7 @@ struct BatchBuffers{V<:AbstractVector{Float32},M<:AbstractMatrix{Float32}}
   BC::M           # (2 × nb) [a₀; a₁] targets per ODE
   DATA::M         # (N1 × nb) raw ψ targets, zero-padded
   MASK::M         # (N1 × nb) 1 on supervised entries, 0 elsewhere
+  variation_weights::V # Shared descending supervised weights
   num_points::Int # P — collocation point count
   num_supervised::Int
   nb::Int         # ODEs in this bin
@@ -356,6 +397,7 @@ function precompute_batch_buffers(settings, items, use_gpu::Bool, to_device_fn)
     to_device_fn(X_cpu), to_device_fn(ALPHA_cpu), D_dev,
     to_device_fn(pow_u_cpu), to_device_fn(pow_du_cpu),
     to_device_fn(BC_cpu), to_device_fn(DATA_cpu), to_device_fn(MASK_cpu),
+    to_device_fn(Float32[max(K-i+1, 0) for i in 1:N1]),
     P, K, nb,
   )
 end
@@ -378,7 +420,7 @@ function select_bin(buf::BatchBuffers, idx)
     buf.X[:, idx], buf.ALPHA[:, idx], buf.D,
     buf.pow_u, buf.pow_du,
     buf.BC[:, idx], buf.DATA[:, idx], buf.MASK[:, idx],
-    buf.num_points, buf.num_supervised, length(idx),
+    buf.variation_weights, buf.num_points, buf.num_supervised, length(idx),
   )
 end
 
@@ -391,7 +433,7 @@ The three loss components for a whole bin at once. `A` is the network output,
 Every operation is a matmul or a broadcast over full arrays: no scalar
 indexing, so this differentiates correctly under Zygote on CPU and GPU alike.
 """
-function batched_power_series_losses(A::AbstractMatrix, buf::BatchBuffers)
+function batched_power_series_losses(A::AbstractMatrix, buf::BatchBuffers; variation::Bool=false)
   # PDE residual: Σ_k α_k ⊙ (D_k · A), summed over derivative orders.
   resid = sum(
     (buf.D[k] * A) .* transpose(view(buf.ALPHA, k, :))
@@ -406,7 +448,8 @@ function batched_power_series_losses(A::AbstractMatrix, buf::BatchBuffers)
              sum(abs2, du_row .- transpose(view(buf.BC, 2, :)))) / buf.nb
 
   # Supervised: masked MSE against the raw ψ targets.
-  loss_sup = sum(abs2, (A .- buf.DATA) .* buf.MASK) / (buf.num_supervised * buf.nb)
+  diff = (A .- buf.DATA) .* buf.MASK
+  loss_sup = (variation ? sum(abs2.(diff) .* buf.variation_weights) : sum(abs2, diff)) / (buf.num_supervised * buf.nb)
 
   return (loss_pde, loss_bc, loss_sup)
 end
@@ -811,6 +854,7 @@ function generate_u_approx(settings::LossFunctionSettings)
   return u_approx
 end
 
+export generate_loss_supervised_variation
 export LossFunctionSettings, ODEBuffers, precompute_buffers, generate_loss_pde_value, generate_loss_bc_value, generate_loss_supervised_value, ode_residual, generate_u_approx
 export BatchBuffers, precompute_batch_buffers, batched_power_series_losses
 export BatchEigBuffers, precompute_batch_eig_buffers, batched_eigenvalue_losses

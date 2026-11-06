@@ -52,7 +52,9 @@ function finish_panels(dir, spec, results, rep, digest)
         root=dirname(dir)
         paths=[joinpath(root,String(r),"panelset.json") for r in (:power_series,:eigenvalue)]
         if all(isfile,paths)
-            paired=paired_panels(load_experiment(paths[1]),load_experiment(paths[2]))
+            variation_path=joinpath(root,"power_series_variation","panelset.json")
+            isfile(variation_path) && push!(paths,variation_path)
+            paired=paired_panels(load_experiment.(paths)...)
             save_experiment(joinpath(root,"comparison.json"),paired)
         end
     end
@@ -209,17 +211,18 @@ function run_frozen_geometry(root,name::Symbol;output_root,n=nothing,ng=nothing,
     selection=JSON.parsefile(joinpath(root,"selection","selected-checkpoints.json"))
     get(selection,"selection_complete",false) || error("Checkpoint selection is incomplete")
     models=selection["models"]
-    expected=Set(vcat(["global/$rep" for rep in (:power_series,:eigenvalue)],
+    reps=Symbol.(get(JSON.parsefile(joinpath(root,"config.json")),"representations",["power_series","eigenvalue"]))
+    expected=Set(vcat(["global/$rep" for rep in reps],
         ["family/$reg/$rep" for reg in (:saddle,:stable_node,:unstable_node,:stable_spiral,:unstable_spiral,:center)
-         for rep in (:power_series,:eigenvalue)]))
-    Set(keys(models))==expected || error("Expected the 14 selected dual-study models")
+         for rep in reps]))
+    Set(keys(models))==expected || error("Selected models do not match the configured experiments")
     for selected in values(models)
         path=joinpath(root,selected["checkpoint"])
         open(io->bytes2hex(sha256(io)),path)==selected["checkpoint_sha256"] ||
             error("Frozen checkpoint changed: $path")
     end
     spec=design(name;n,ng,ntest)
-    for rep in (:power_series,:eigenvalue)
+    for rep in reps
         dir=joinpath(out,String(name),String(rep))
         ispath(joinpath(dir,"results.json")) && error("Results already exist: $dir")
         results=Dict{String,Any}()

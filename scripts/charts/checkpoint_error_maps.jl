@@ -22,7 +22,7 @@ function checkpoint_errors(path, taus, deltas; nx=200, batch_size=1024)
     inputs = reduce(hcat, [encoding == "trace_determinant" ?
       Float32[t, d] : Float32[d, -t, 1] for (t, d) in chunk])
     output = Float64.(first(net(inputs, params, state)))
-    predicted = if rep === :power_series
+    predicted = if rep in (:power_series, :power_series_variation)
       # Raw derivative coefficients: factorials belong in reconstruction.
       basis = ones(Float64, nx, size(output, 1))
       for n in 1:size(output, 1)-1

@@ -34,13 +34,13 @@ function parse_commandline()
 
   @add_arg_table! s begin
     "--reps"
-      help = "Comma-separated representations (power_series, eigenvalue)"
+      help = "Comma-separated representations (power_series, eigenvalue, power_series_variation)"
       arg_type = String
-      default = "power_series,eigenvalue"
+      default = "power_series,eigenvalue,power_series_variation"
     "--experiments"
-      help = "Comma-separated experiments: transfer, extrapolate, range, showcase, gen_radius, family_disks, spiral_transfer, pair_transfer, parabola_segment, parabola_slide, parabola_curves, parabola_bias, axis_transfer, axis_sweep"
+      help = "all, or comma-separated experiments: transfer, extrapolate, range, showcase, gen_radius, gen_radius_family, family_disks, spiral_transfer, pair_transfer, parabola_segment, parabola_slide, parabola_curves, parabola_bias, axis_transfer, axis_sweep"
       arg_type = String
-      default = "transfer,extrapolate,range,showcase,gen_radius"
+      default = "all"
     "--Rmax"
       help = "Number of extrapolation shells (extrapolate, range)"
       arg_type = Int
@@ -57,6 +57,9 @@ function parse_commandline()
       help = "Adam iterations per PINN (forwarded to Experiments.ExperimentConfig)"
       arg_type = Int
       default = 3000
+    "--dry-run"
+      help = "Print all planned jobs without training or writing results"
+      action = :store_true
     "--output-root"
       help = "Root directory for staged results; build_gen_jobs adds a 'gen-<exp>-<rep>' subdir per job"
       arg_type = String
@@ -74,16 +77,17 @@ function parse_reps(s::AbstractString)
     t = strip(tok)
     isempty(t) && continue
     sym = Symbol(t)
-    sym in (:power_series, :eigenvalue) || error(
-      "Unknown representation :$sym; expected power_series or eigenvalue")
+    sym in (:power_series, :eigenvalue, :power_series_variation) || error(
+      "Unknown representation :$sym; expected power_series, eigenvalue or power_series_variation")
     push!(reps, sym)
   end
   return Tuple(reps)
 end
 
 function parse_experiments(s::AbstractString)
+  s == "all" && return GeneralizationVariants.ALL_EXPERIMENTS
   exps = Symbol[]
-  valid = (:transfer, :extrapolate, :range, :showcase, :gen_radius, GeneralizationVariants.GEOMETRY_EXPERIMENTS...)
+  valid = GeneralizationVariants.ALL_EXPERIMENTS
   for tok in split(s, ",")
     t = strip(tok)
     isempty(t) && continue
@@ -117,6 +121,16 @@ specs = [GeneralizationSpec(exp,rep;
     for rep in reps for exp in experiments]
 
 # ---- Build jobs + run ----
+if parsed["dry-run"]
+  for spec in specs
+    println(spec.name, " / ", spec.representation, " / iterations=", spec.maxiters,
+            " / points_per_patch_or_region=", spec.n_per_region)
+  end
+  println("Total experiment/variant jobs: ", length(specs))
+  exit(0)
+end
+isdir(parsed["output-root"]) && !isempty(readdir(parsed["output-root"])) &&
+  error("Output root is not empty; choose a new --output-root to preserve previous runs")
 mkpath(parsed["output-root"])
 jobs = build_gen_jobs(specs, parsed["output-root"])
 

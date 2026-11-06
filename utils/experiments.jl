@@ -149,7 +149,7 @@ function evaluate_on(p, net, st, settings::PINNSettings, dataset::Dict)
   out = first(net(buf.X, p, st))
   pde, bc, sup = settings.representation === :eigenvalue ?
     LF.batched_eigenvalue_losses(out, buf) :
-    LF.batched_power_series_losses(out, buf)
+    LF.batched_power_series_losses(out, buf; variation=settings.representation === :power_series_variation)
   relerr = LF.relative_l2(LF.batched_reconstruct(out, buf), LF.true_solutions(buf))
   return (pde=Float32(pde), bc=Float32(bc), sup=Float32(sup), relerr=relerr)
 end

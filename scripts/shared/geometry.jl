@@ -59,7 +59,7 @@ elseif mode in ("train","frozen")
     if mode=="train"
         names=parse_exps(get(ARGS,3,"all")); n=optional_int(4)
         iters=parse(Int,get(ARGS,5,"3000")); ng=optional_int(6)
-        for name in names, rep in (:power_series,:eigenvalue)
+        for name in names, rep in (:power_series,:eigenvalue,:power_series_variation)
             cfg=GeometryExperiments.Experiments.ExperimentConfig(;representation=rep,n_per_region=something(n,jeet_controls(name).n),maxiters=iters)
             GeometryExperiments.run_geometry(cfg,name;output_root=ARGS[2],ng)
         end

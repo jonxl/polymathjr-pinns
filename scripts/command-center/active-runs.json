@@ -1,0 +1,6 @@
+{
+  "run_roots": [
+    "results/geometry/dual-representation-exp-2",
+    "results/generalization/three-variants-1m"
+  ]
+}

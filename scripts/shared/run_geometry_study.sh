@@ -16,9 +16,9 @@ done
 
 export_report() {
   if [[ -n "${STUDY_PYTHON:-}" ]]; then
-    "$STUDY_PYTHON" scripts/charts/export_dual_study.py --date "$study_date" --geometry-root results/geometry --geometry-root "$study_root"
+    "$STUDY_PYTHON" scripts/charts/export_dual_study.py --date "$study_date" --geometry-root results/geometry/dual-representation-exp-2 --geometry-root "$study_root"
   else
-    uv run scripts/charts/export_dual_study.py --date "$study_date" --geometry-root results/geometry --geometry-root "$study_root"
+    uv run scripts/charts/export_dual_study.py --date "$study_date" --geometry-root results/geometry/dual-representation-exp-2 --geometry-root "$study_root"
   fi
 }
 

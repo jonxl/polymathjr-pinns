@@ -181,6 +181,10 @@ function write_loss_charts(results_root, output_dir)
              titlefontsize=10, legendfontsize=7, guidefontsize=8, tickfontsize=7)
     plot!(p, ev.iteration, positive(ev.total); label="eigenvalue", lw=2,
           color=:darkorange, ls=:dash)
+    if :power_series_variation in REPRESENTATIONS
+      weighted = CSV.read(joinpath(checkpoint_dir(results_root, :power_series_variation, region), "loss.csv"), DataFrame)
+      plot!(p, weighted.iteration, positive(weighted.total); label="power series variation", lw=2, color=:purple)
+    end
     push!(panels, p)
   end
   fig = plot(panels...; layout=(2, 3), size=(1500, 900),
@@ -190,7 +194,7 @@ function write_loss_charts(results_root, output_dir)
   global_panels = [loss_panel(joinpath(results_root, "global", String(rep), "loss.csv"),
                               "Global — $(replace(String(rep), "_" => " "))")
                    for rep in REPRESENTATIONS]
-  save_png(plot(global_panels...; layout=(1, 2), size=(1400, 600),
+  save_png(plot(global_panels...; layout=(1, length(REPRESENTATIONS)), size=(1400, 600),
                 plot_title="Global-model training losses"),
            joinpath(output_dir, "global-side-by-side-loss.png"))
 end
@@ -324,7 +328,7 @@ function write_contour_charts(results_root, output_dir, ng, limit; color_scale=:
     push!(global_panels, contour_panel(taus, deltas, matrix,
       "Global — $(replace(String(rep), "_" => " "))", clims; color_scale))
   end
-  save_png(plot(global_panels...; layout=(1, 2), size=(1400, 650),
+  save_png(plot(global_panels...; layout=(1, length(REPRESENTATIONS)), size=(1400, 650),
                 plot_title="Global-model generalization"),
            joinpath(output_dir, "global-side-by-side-contours.png"))
 end
@@ -430,6 +434,8 @@ end
 function main(args=ARGS)
   opts = parse_args(args)
   opts === nothing && return nothing
+  empty!(REPRESENTATIONS)
+  append!(REPRESENTATIONS, Symbol.(get(JSON.parsefile(joinpath(opts.results_root, "config.json")), "representations", ["power_series", "eigenvalue"])))
   require_inputs(opts.results_root)
   mkpath(opts.chart_root)
   write_loss_charts(opts.results_root, joinpath(opts.chart_root, "training-loss"))

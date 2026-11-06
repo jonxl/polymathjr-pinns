@@ -70,7 +70,7 @@ function run_training(settings::TrainingSchemesSettings, maxiters::Int, mileston
     # Generate run_id upfront so the output directory is known before training.
     # Tag eigenvalue runs so results/ directories are self-describing; power-series
     # runs keep their historical naming.
-    run_tag = representation === :eigenvalue ? "$(pinn_settings.optimizer)-eig" : pinn_settings.optimizer
+    run_tag = representation === :eigenvalue ? "$(pinn_settings.optimizer)-eig" : representation === :power_series_variation ? "$(pinn_settings.optimizer)-variation" : pinn_settings.optimizer
     run_id = generate_run_id(run_tag)
     output_dir = joinpath("results", "run-$run_id")
     mkpath(output_dir)

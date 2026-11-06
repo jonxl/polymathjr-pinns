@@ -68,8 +68,8 @@ end
 function VariantSpec(name::AbstractString, representation::Symbol;
                      N::Int=20, neuron_count::Int=64, maxiters::Int=3000,
                      seed_offset::Int=0)
-  representation in (:power_series, :eigenvalue) || error(
-    "VariantSpec: representation must be :power_series or :eigenvalue, got :$representation")
+  representation in (:power_series, :eigenvalue, :power_series_variation) || error(
+    "VariantSpec: representation must be :power_series, :eigenvalue or :power_series_variation, got :$representation")
   return VariantSpec(String(name), representation, N, neuron_count, maxiters, seed_offset)
 end
 

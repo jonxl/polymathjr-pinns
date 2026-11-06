@@ -58,10 +58,12 @@ function artifact_files(root)
   return files
 end
 
+study_representations(root) = get(JSON.parsefile(joinpath(root, "config.json")), "representations", ["power_series", "eigenvalue"])
+
 function final_checkpoint_count(root)
   regions = ("saddle", "stable_node", "unstable_node",
              "stable_spiral", "unstable_spiral", "center")
-  representations = ("power_series", "eigenvalue")
+  representations = study_representations(root)
   dirs = [joinpath(root, "global", representation)
           for representation in representations]
   append!(dirs, [joinpath(root, "family", region, representation)
@@ -86,8 +88,9 @@ end
 
 function finalize(root)
   required_paths(root)
-  final_checkpoint_count(root) == 14 || error("Expected exactly 14 final model checkpoints")
-  selected_checkpoint_count(root) == 14 || error("Expected exactly 14 validation-selected model checkpoints")
+  expected = 7 * length(study_representations(root))
+  final_checkpoint_count(root) == expected || error("Expected exactly $expected final model checkpoints")
+  selected_checkpoint_count(root) == expected || error("Expected exactly $expected validation-selected model checkpoints")
   files = artifact_files(root)
   entries = [Dict(
     "path" => relpath(path, root),
@@ -104,8 +107,8 @@ function finalize(root)
     "finalized_at" => Dates.format(now(UTC), dateformat"yyyy-mm-ddTHH:MM:SSZ"),
     "file_count" => length(entries),
     "total_bytes" => sum(entry["bytes"] for entry in entries),
-    "final_checkpoint_count" => 14,
-    "selected_checkpoint_count" => 14,
+    "final_checkpoint_count" => expected,
+    "selected_checkpoint_count" => expected,
     "chart_count" => chart_count,
     "files" => entries,
   )

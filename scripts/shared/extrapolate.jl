@@ -13,7 +13,7 @@ isdir("data") || mkpath("data")
 const REGIONS = [:saddle, :stable_node, :unstable_node,
                  :stable_spiral, :unstable_spiral, :center]
 
-for rep in [:power_series, :eigenvalue]
+for rep in [:power_series, :eigenvalue, :power_series_variation]
     cfg = ExperimentConfig(; representation=rep)
     @info "Running extrapolate: $rep"
     ps = run_extrapolate(cfg, REGIONS, 4, "shared_extrapolate")

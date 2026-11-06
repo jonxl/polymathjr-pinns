@@ -8,7 +8,7 @@ const GG = GE.GeneralizationGeometry
 root, name, iterations = ARGS[1], Symbol(ARGS[2]), parse(Int, ARGS[3])
 name in GG.EXPERIMENTS || error("Unknown experiment: $name")
 iterations > 0 || error("Iterations must be positive")
-for rep in (:power_series, :eigenvalue)
+for rep in (:power_series, :eigenvalue, :power_series_variation)
     cfg = GE.Experiments.ExperimentConfig(; representation=rep, N=20,
         n_per_region=GG.jeet_controls(name).n, maxiters=iterations)
     dir = joinpath(root, String(name), String(rep))

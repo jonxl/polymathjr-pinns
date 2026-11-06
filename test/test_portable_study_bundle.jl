@@ -31,6 +31,7 @@ end
       "charts/overview.png",
     ]
     foreach(relative -> write_fixture(root, relative), required)
+    write(joinpath(root, "config.json"), "{}")
 
     representations = ("power_series", "eigenvalue")
     regions = ("saddle", "stable_node", "unstable_node",
@@ -55,5 +56,19 @@ end
 
     write_fixture(root, "unexpected.txt")
     @test_throws ErrorException verify(root)
+  end
+end
+
+@testset "Three-experiment checkpoint inventory" begin
+  mktempdir() do root
+    reps = ["power_series", "eigenvalue", "power_series_variation"]
+    write(joinpath(root, "config.json"), JSON.json(Dict("representations"=>reps)))
+    for rep in reps
+      write_fixture(root, "global/$rep/model-final.checkpoint")
+      for region in ("saddle", "stable_node", "unstable_node", "stable_spiral", "unstable_spiral", "center")
+        write_fixture(root, "family/$region/$rep/model-final.checkpoint")
+      end
+    end
+    @test final_checkpoint_count(root) == 21
   end
 end

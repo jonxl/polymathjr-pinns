@@ -58,8 +58,8 @@ const VALIDATION_RECIPE = CanonicalODESplit(:validation, VALIDATION_SIZE, VALIDA
 const TEST_RECIPE = CanonicalODESplit(:test, TEST_SIZE, TEST_SEED, N;
   shuffle_seed=SHUFFLE_SEED + 20_000, regions=REGIONS)
 
-# Materialize the exact ODE populations before any model starts. Both
-# representations subsequently read these same memory-mapped arrays.
+# Materialize the exact ODE populations before any model starts. All three
+# experiments subsequently read these same memory-mapped arrays.
 const TRAIN_SPLIT = materialize_split(TRAIN_RECIPE, joinpath(OUTPUT_ROOT, "datasets", "train"))
 const VALIDATION_SPLIT = materialize_split(VALIDATION_RECIPE, joinpath(OUTPUT_ROOT, "datasets", "validation"))
 const TEST_SPLIT = materialize_split(TEST_RECIPE, joinpath(OUTPUT_ROOT, "datasets", "test"))
@@ -152,7 +152,7 @@ function run_config()
     "output_root" => OUTPUT_ROOT,
     "git_commit" => git_commit(),
     "source_tree_id" => source["source_tree_id"],
-    "representations" => ["power_series", "eigenvalue"],
+    "representations" => ["power_series", "eigenvalue", "power_series_variation"],
     "training" => Dict(
       "epochs" => EPOCHS,
       "batch_size" => BATCH_SIZE,
@@ -175,7 +175,7 @@ function run_config()
       "validation" => split_manifest(VALIDATION_SPLIT),
       "test" => split_manifest(TEST_SPLIT),
     ),
-    "experimental_control" => "Both representations read identical materialized ODE records and use identical epoch permutations and minibatches.",
+    "experimental_control" => "All three experiments read identical materialized ODE records with u(0)=1 and u'(0)=0, and use identical train/validation/test splits, epoch permutations and minibatches.",
     "test_policy" => "The final test split is not used for training, checkpoint selection, or hyperparameter selection.",
   )
 end
@@ -204,7 +204,7 @@ function write_run_manifests()
   isfile(config_md_path) && return
   open(config_md_path, "w") do io
     println(io, "# Dual-representation 10M training configuration\n")
-    println(io, "This directory is a portable study bundle. Both representations train from the same checksummed, materialized ODE records. Power-series and eigenvalue targets are derived from each shared ODE; they are not independently sampled datasets.\n")
+    println(io, "This directory is a portable study bundle. All three experiments train from the same checksummed, materialized ODE records. Power-series and eigenvalue targets are derived from each shared ODE; they are not independently sampled datasets.\n")
     println(io, "- Training ODEs: **$(TRAIN_SIZE)**")
     println(io, "- Validation ODEs: **$(VALIDATION_SIZE)**")
     println(io, "- Final untouched test ODEs: **$(TEST_SIZE)**")
@@ -215,7 +215,7 @@ function write_run_manifests()
     println(io, "- Checkpoints: every **$(CHECKPOINT_EPOCH_INTERVAL)** epochs; the final model is saved separately")
     println(io, "- Power-series degree: **N=$(N)** ($(N + 1) outputs)")
     println(io, "- Eigenvalue outputs: **4**")
-    println(io, "- Models: **2 global + 12 family-specific = 14 total**")
+    println(io, "- Models: **3 global + 18 family-specific = 21 total**")
     println(io, "- Dense MLPs: power series `2→64→64→64→21` (**9,877 parameters**); eigenvalue `2→64→64→64→4` (**8,772 parameters**)")
     println(io, "- Dataset seed: **$(DATASET_SEED)**")
     println(io, "- Shuffle seed: **$(SHUFFLE_SEED)**")
@@ -333,7 +333,7 @@ function train_model(representation::Symbol, scope::Symbol;
   count = region === nothing ? TRAIN_SPLIT.size : family_size(TRAIN_SPLIT, region)
   batches = cld(count, BATCH_SIZE)
   maxiters = batches * EPOCHS
-  parameter_count = representation === :power_series ? 9_877 : 8_772
+  parameter_count = representation !== :eigenvalue ? 9_877 : 8_772
   parameter_tag = "p$(lpad(parameter_count, 6, '0'))"
   dataset = dummy_dataset(TRAIN_SPLIT, region)
   settings = PINNSettings(
@@ -373,7 +373,7 @@ function train_model(representation::Symbol, scope::Symbol;
     "hidden_layers" => [64, 64, 64],
     "input_encoding" => "trace_determinant",
     "input_width" => 2,
-    "output_width" => representation === :power_series ? N + 1 : 4,
+    "output_width" => representation !== :eigenvalue ? N + 1 : 4,
     "parameter_count" => parameter_count,
     "checkpoint_filename_tag" => "dense-mlp-$(parameter_tag)",
     "unique_training_odes" => count,
@@ -441,13 +441,13 @@ write_run_manifests()
 function build_jobs()
   jobs = NamedTuple[]
   if RUN_GLOBAL_MODELS
-    for representation in (:power_series, :eigenvalue)
+    for representation in (:power_series, :eigenvalue, :power_series_variation)
       push!(jobs, (representation=representation, scope=:global, region=nothing))
     end
   end
   if RUN_FAMILY_MODELS
     for region in REGIONS
-      for representation in (:power_series, :eigenvalue)
+      for representation in (:power_series, :eigenvalue, :power_series_variation)
         push!(jobs, (representation=representation, scope=:family, region=region))
       end
     end

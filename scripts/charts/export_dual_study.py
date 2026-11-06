@@ -42,8 +42,16 @@ def export_browser_assets(output):
         shutil.copyfile(source, destination / source.name)
 
 REPS = ("power_series", "eigenvalue")
-LABELS = ("Power series", "Eigenvalue")
+LABELS = ("Power series (default)", "Eigenvalue")
+ALL_REPS = (*REPS, "power_series_variation")
+ALL_LABELS = (*LABELS, "Power series (variation)")
 EXPERIMENTS = {
+    "transfer": "Measure transfer between training and test ODE families.",
+    "extrapolate": "Measure solution error on expanding shells beyond each training region.",
+    "range": "Measure cross-family transfer as evaluation distance increases.",
+    "showcase": "Compare solution curves and errors across six scenarios.",
+    "gen_radius": "Train on a disk and measure generalization across the parameter plane.",
+    "gen_radius_family": "Train per family and measure error maps and generalization area.",
     "family_disks": "Train on small family patches; measure plane error, radial extrapolation, and reach beyond the patch.",
     "spiral_transfer": "Train on the two spiral patches; measure transfer to the other ODE families.",
     "pair_transfer": "Compare training on paired spiral patches with training on paired node patches.",
@@ -95,7 +103,9 @@ def load_training_history(path):
 def render_training_history(history, rep, title, destination):
     """One model, one axis: logged total and raw components, without smoothing."""
     fig, ax = plt.subplots(figsize=(12, 5.5), layout="constrained")
-    supervised = "Coefficient supervision (raw)" if rep == "power_series" else "Solution supervision (raw)"
+    supervised = "Coefficient supervision (raw)" if rep != "eigenvalue" else "Solution supervision (raw)"
+    if rep == "power_series_variation":
+        supervised = "Coefficient supervision (descending weights)"
     labels = {"total": "Total objective (weighted)", "pde": "PDE residual (raw)",
               "bc": "Initial conditions (diagnostic)", "supervised": supervised}
     colors = {"total": "#24313a", "pde": "#245b91", "bc": "#b45309", "supervised": "#15803d"}
@@ -128,7 +138,7 @@ def render_training_history(history, rep, title, destination):
 
 def paired_figure_row(key, label, figures):
     cells = []
-    for rep, name in zip(REPS, LABELS):
+    for rep, name in zip(ALL_REPS, ALL_LABELS):
         cells.append(figures.get(rep, f'<figure><h3>{name}</h3><p>No saved result for this model.</p></figure>'))
     return f'<div class="figure-pair" data-chart-group="{esc(key)}" data-chart-label="{esc(label)}">{"".join(cells)}</div>'
 
@@ -136,19 +146,20 @@ def paired_figure_row(key, label, figures):
 def training_section(roots, assets, output):
     entries, figures, seen = [], {}, set()
     for root in roots:
-        for path in sorted(root.rglob("loss.csv"), key=lambda p: (str(p.parent.parent), REPS.index(p.parent.name) if p.parent.name in REPS else 0)):
+        for path in sorted(root.rglob("loss.csv"), key=lambda p: (str(p.parent.parent), ALL_REPS.index(p.parent.name) if p.parent.name in ALL_REPS else 0)):
             if path.resolve() in seen:
                 continue
-            rep = next((r for r in REPS if r in path.parts), None)
+            rep = next((r for r in sorted(ALL_REPS, key=len, reverse=True)
+                        if any(part == r or (part.startswith("gen-") and part.endswith("-"+r)) for part in path.parts)), None)
             if rep is None:
                 continue
             seen.add(path.resolve())
             history = load_training_history(path)
             identity = path.parent.relative_to(root).as_posix()
-            label = LABELS[REPS.index(rep)]
+            label = ALL_LABELS[ALL_REPS.index(rep)]
             model_parts = path.parent.relative_to(root).parts
             model_name = '/'.join(model_parts[-3:-1] if 'family' in model_parts else model_parts[-2:-1])
-            if model_parts[-1] not in REPS and len(model_parts)>=3:
+            if model_parts[-1] not in ALL_REPS and len(model_parts)>=3:
                 model_name = '/'.join((model_parts[-3],model_parts[-1]))
             title = f"{label} · {model_name.replace('_', ' ')}"
             name = f"training-{len(entries)+1:02d}-{slug(identity)}"
@@ -160,7 +171,7 @@ def training_section(roots, assets, output):
                      "first_iteration": float(history["iteration"][0]), "last_iteration": float(history["iteration"][-1]),
                      "figure": relative+".png", "data": relative+".csv"}
             entries.append(entry)
-            group_key = '/'.join('representation' if part == rep else part for part in path.parent.resolve().parts)
+            group_key = '/'.join(part.replace(rep, 'representation') for part in path.parent.resolve().parts)
             group = figures.setdefault(group_key, {"label": f'{model_name.replace("_", " ")} · {identity.rsplit("/", 1)[0]}', "figures": {}})
             group["figures"][rep] = f'<figure><h3>{esc(title)}</h3><p class="facts">{entry["samples"]} logged samples · iterations {entry["first_iteration"]:g}–{entry["last_iteration"]:g}<br>Run: {esc(identity)}</p><a href="{relative}.png"><img loading="lazy" src="{relative}.png" alt="{esc(title)}: total, PDE, initial-condition and supervised losses over iterations"></a><figcaption><a href="{relative}.pdf">PDF</a> · <a href="{relative}.png">PNG</a> · <a href="{relative}.csv">Loss CSV</a></figcaption></figure>'
     if not entries:
@@ -172,7 +183,7 @@ def training_section(roots, assets, output):
 def pair_panels(left, right):
     """Match by identity, never by incidental JSON ordering; reject changed designs."""
     lm, rm = left["meta"], right["meta"]
-    if (lm.get("representation"), rm.get("representation")) != REPS:
+    if lm.get("representation") != "power_series" or rm.get("representation") not in ALL_REPS[1:]:
         raise ValueError("Expected power_series on the left and eigenvalue on the right")
     for key in set(lm) | set(rm):
         if key != "representation" and lm.get(key) != rm.get(key):
@@ -380,6 +391,14 @@ def build(args):
             other = path.parent.parent / "eigenvalue" / "panelset.json"
             if other.exists():
                 pairs.append((path.parent.parent.name, path, other, True))
+        # The five diagnostic suites (including both radius modes) use gen-* job directories.
+        for path in sorted(directory.rglob("gen-*-power_series/panelset.json")):
+            name = path.parent.name.removeprefix("gen-").removesuffix("-power_series")
+            if name not in ("transfer", "extrapolate", "range", "showcase", "gen_radius", "gen_radius_family"):
+                continue  # Geometry panelsets are discovered in their canonical directories above.
+            other = path.parent.parent / f"gen-{name}-eigenvalue" / "panelset.json"
+            if other.exists():
+                pairs.append((name, path, other, False))
     manifest = {"date": date, "source_commit": "bb2a102a", "comparisons": [], "geometry_status": {}}
     sections, counts, seen = [], {}, set()
     diagnostics = {}
@@ -390,18 +409,30 @@ def build(args):
         seen.add(identity)
         left, right = read(left_path), read(right_path)
         panels = list(pair_panels(left, right))
+        job_layout = left_path.name == "panelset.json" and left_path.parent.name.startswith("gen-")
+        variation_path = (left_path.parent.parent / "power_series_variation" / "panelset.json" if geometry
+                          else left_path.with_name(left_path.name.replace("_power_series.json", "_power_series_variation.json")))
+        if job_layout:
+            variation_path = left_path.parent.parent / f"gen-{name}-power_series_variation" / "panelset.json"
+        source_paths = [left_path, right_path]
+        comparison_reps, comparison_labels = REPS, LABELS
+        if variation_path.exists():
+            variation_pairs = list(pair_panels(left, read(variation_path)))
+            panels = [(*pair, weighted[1]) for pair, weighted in zip(panels, variation_pairs)]
+            source_paths.append(variation_path)
+            comparison_reps, comparison_labels = ALL_REPS, ALL_LABELS
         tag = f"{number:02d}-{slug(name)}"
         meta = left["meta"]
         if geometry and meta.get("mode") == "matched_training" and not meta.get("design_sha256"):
             raise ValueError(f"Missing matched-training design fingerprint: {left_path}")
-        experiment = meta.get("experiment")
+        experiment = meta.get("experiment", name if job_layout else None)
         mode = meta.get("mode", "archived results; matching controls not recorded")
-        if geometry:
-            counts.setdefault(experiment, []).append(mode)
-        run_group = left_path.parent.parent.parent.name if geometry else "Earlier saved experiments"
+        if geometry or job_layout:
+            counts.setdefault(experiment, []).append("matched_training" if job_layout else mode)
+        run_group = left_path.parent.parent.parent.name if geometry else left_path.parent.parent.name if job_layout else "Earlier saved experiments"
         entry = {"name": name, "run_group": run_group, "mode": mode, "metadata": meta, "sources": [], "figures": [], "training_diagnostics": [], "unavailable_figures": []}
         source_links = []
-        for rep, path in zip(REPS, (left_path, right_path)):
+        for rep, path in zip(comparison_reps, source_paths):
             target = assets / f"{tag}-{rep}.json"
             shutil.copyfile(path, target)
             digest = hashlib.sha256(path.read_bytes()).hexdigest()
@@ -420,7 +451,7 @@ def build(args):
         for index, pair in enumerate(panels, 1):
             filename = f"{tag}-{index:02d}-{slug(pair[0]['id'])}"
             if any(is_training_diagnostic(p) for p in pair):
-                for rep, label, panel in zip(REPS, LABELS, pair):
+                for rep, label, panel in zip(comparison_reps, comparison_labels, pair):
                     diagnostic_name = f"{filename}-{rep}-diagnostic"
                     render_pair((panel,), assets / diagnostic_name, labels=(label+" · training diagnostic",))
                     relative = (assets / diagnostic_name).relative_to(output).as_posix()
@@ -430,14 +461,14 @@ def build(args):
                     entry["training_diagnostics"].append({"representation": rep, "figure": relative+".png", "scale": "independent"})
                 continue
             try:
-                render_pair(pair, assets / filename)
+                render_pair(pair, assets / filename, labels=comparison_labels)
             except ValueError as error:
                 entry["unavailable_figures"].append({"id": pair[0]["id"], "reason": str(error)})
                 body.append(f'<div class="status"><h3>{esc(pair[0]["title"])}</h3><p>Figure unavailable: {esc(error)}.</p></div>')
                 continue
             relative = (assets / filename).relative_to(output).as_posix()
             title = pair[0]["title"].replace(" (power_series)", "")
-            body.append(f'<figure data-chart-id="{esc(pair[0]["id"])}"><h3>{esc(title)}</h3><a href="{relative}.png"><img loading="lazy" src="{relative}.png" alt="{esc(title)}: power series left, eigenvalue right"></a><figcaption>{esc(caption(pair[0]))} <a href="{relative}.pdf">PDF</a> · <a href="{relative}.png">PNG</a></figcaption></figure>')
+            body.append(f'<figure data-chart-id="{esc(pair[0]["id"])}"><h3>{esc(title)}</h3><a href="{relative}.png"><img loading="lazy" src="{relative}.png" alt="{esc(title)}: {esc(", ".join(comparison_labels))}"></a><figcaption>{esc(caption(pair[0]))} <a href="{relative}.pdf">PDF</a> · <a href="{relative}.png">PNG</a></figcaption></figure>')
             entry["figures"].append(relative+".png")
         body.append("</section>")
         sections.append((tag, section_title, "".join(body)))
@@ -455,7 +486,7 @@ def build(args):
     manifest["training_histories"] = history_entries
     manifest_path.write_text(json.dumps(manifest, indent=2)+"\n")
     nav = ' · '.join(f'<a href="#{tag}">{esc(name)}</a>' for tag, name, _ in sections)
-    command = f"bash scripts/shared/run_geometry_study.sh {date}"
+    command = f"bash scripts/shared/run_generalization_study.sh {date} results/generalization/three-variants-1m 1000000"
     diagnostic_section = ''
     if any(diagnostics.values()):
         diagnostic_section = '<section id="training-diagnostics"><h2>Loss diagnostics on evaluation equations</h2><p>These component measurements describe held-out equations, not training progress. Smaller raw losses do not establish better solution accuracy across representations.</p>'
@@ -481,7 +512,7 @@ def build(args):
     )
     target = output / f"{stem}.html"
     target.write_text(page)
-    print(f"{target}\n{total} paired figures; {completed}/9 matched geometry experiments")
+    print(f"{target}\n{total} paired figures; {completed}/15 matched experiment groups")
     return target, manifest
 
 
@@ -494,9 +525,9 @@ def main():
     parser.add_argument("--training-root", action="append", type=Path, help="Discover base-model loss.csv histories; repeatable")
     args = parser.parse_args()
     args.panel_data = args.panel_data if args.panel_data is not None else []
-    args.training_root = args.training_root if args.training_root is not None else [ROOT / "results/dual-rep-studies"]
+    args.training_root = args.training_root if args.training_root is not None else []
     if not args.geometry_root:
-        args.geometry_root = [ROOT / "results/geometry"]
+        args.geometry_root = [ROOT / path for path in read(ROOT / "scripts/command-center/active-runs.json")["run_roots"]]
     build(args)
 
 

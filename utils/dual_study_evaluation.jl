@@ -18,7 +18,7 @@ using .Plugboard
 const LF = PINN.loss_functions
 const REGIONS = [:saddle, :stable_node, :unstable_node,
                  :stable_spiral, :unstable_spiral, :center]
-const REPRESENTATIONS = [:power_series, :eigenvalue]
+representations(config) = Symbol.(get(config, "representations", ["power_series", "eigenvalue"]))
 
 export select_checkpoints, run_final_test, run_generalization_suite,
        run_custom_inference, load_study
@@ -153,7 +153,7 @@ function evaluate_checkpoint(path::AbstractString, representation::Symbol,
     output = first(net(buffers.X, params_device, state_device))
     pde, bc, sup = representation === :eigenvalue ?
       LF.batched_eigenvalue_losses(output, buffers) :
-      LF.batched_power_series_losses(output, buffers)
+      LF.batched_power_series_losses(output, buffers; variation=representation === :power_series_variation)
     predicted = LF.batched_reconstruct(output, buffers)
     truth = LF.true_solutions(buffers)
     n = length(items)
@@ -192,7 +192,7 @@ function evaluate_dataset_checkpoint(path::AbstractString, representation::Symbo
   output = first(net(buffers.X, params_device, state_device))
   pde, bc, sup = representation === :eigenvalue ?
     LF.batched_eigenvalue_losses(output, buffers) :
-    LF.batched_power_series_losses(output, buffers)
+    LF.batched_power_series_losses(output, buffers; variation=representation === :power_series_variation)
   predicted = LF.batched_reconstruct(output, buffers)
   truth = LF.true_solutions(buffers)
   predicted_cpu = Array(predicted)
@@ -277,9 +277,9 @@ function select_checkpoints(root::AbstractString; evaluation_batch_size::Int=16_
   rows = NamedTuple[]
   selected = Dict{String,Any}()
 
-  jobs = [(scope=:global, region=nothing, representation=rep) for rep in REPRESENTATIONS]
+  jobs = [(scope=:global, region=nothing, representation=rep) for rep in representations(study.config)]
   append!(jobs, [(scope=:family, region=region, representation=rep)
-                 for region in REGIONS for rep in REPRESENTATIONS])
+                 for region in REGIONS for rep in representations(study.config)])
   for job in jobs
     dir = _model_dir(root, job.scope, job.representation, job.region)
     candidates = _candidate_checkpoints(dir, checkpoint_every, epochs)
@@ -418,7 +418,7 @@ function run_final_test(root::AbstractString; evaluation_batch_size::Int=16_384,
   config = study.config
   global_metrics = Dict{String,Any}()
 
-  for representation in REPRESENTATIONS
+  for representation in representations(study.config)
     key = _model_key(:global, representation, nothing)
     selected = selection["models"][key]
     checkpoint = joinpath(root, selected["checkpoint"])
@@ -615,7 +615,7 @@ function run_generalization_suite(root::AbstractString;
   N = Int(study.config["training"]["power_series_degree"])
   results = Dict{String,Any}()
 
-  for representation in REPRESENTATIONS
+  for representation in representations(study.config)
     rep_results = Dict{String,Any}()
     family_checkpoints = Dict(region => _selected_checkpoint(root, selection,
       _model_key(:family, representation, region)) for region in REGIONS)
@@ -712,9 +712,9 @@ function run_custom_inference(root::AbstractString, points::AbstractVector,
   N = Int(study.config["training"]["power_series_degree"])
   dataset = _dataset_from_points(normalized, N)
   models = Dict{String,Any}()
-  jobs = [(scope=:global, region=nothing, representation=rep) for rep in REPRESENTATIONS]
+  jobs = [(scope=:global, region=nothing, representation=rep) for rep in representations(study.config)]
   append!(jobs, [(scope=:family, region=region, representation=rep)
-                 for region in REGIONS for rep in REPRESENTATIONS])
+                 for region in REGIONS for rep in representations(study.config)])
 
   for job in jobs
     key = _model_key(job.scope, job.representation, job.region)

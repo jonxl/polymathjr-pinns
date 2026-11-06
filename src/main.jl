@@ -39,7 +39,7 @@ function parse_commandline()
     arg_type = String
     default = "TRAIN"
     "--representation"
-    help = "Solution representation: power_series (u = Σ ψₙxⁿ/n!) or eigenvalue (u = e^{μx}[A·C(k,x)+B·S(k,x)]). eigenvalue requires 2nd-order ODEs."
+    help = "Solution representation: power_series (u = Σ ψₙxⁿ/n!), power_series_variation (descending coefficient-loss weights), or eigenvalue (u = e^{μx}[A·C(k,x)+B·S(k,x)]). eigenvalue requires 2nd-order ODEs."
     arg_type = String
     default = "power_series"
     "--gen-data"
@@ -97,8 +97,8 @@ TRAINING_MODE = parsed_args["mode"]
 # Which solution representation to train. Determines the network's input/output
 # widths (via io_dims), which loss triple runs, and which buffers are built.
 REPRESENTATION = Symbol(parsed_args["representation"])
-if !(REPRESENTATION in (:power_series, :eigenvalue))
-  error("--representation must be power_series or eigenvalue, got \"$(parsed_args["representation"])\"")
+if !(REPRESENTATION in (:power_series, :eigenvalue, :power_series_variation))
+  error("--representation must be power_series, eigenvalue or power_series_variation, got \"$(parsed_args["representation"])\"")
 end
 
 SAVE_SNAPSHOTS = !parsed_args["no-snap"]

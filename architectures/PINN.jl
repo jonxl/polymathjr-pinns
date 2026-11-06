@@ -142,6 +142,8 @@ end
 
 # Eigenvalue: input is the trace/determinant pair (τ, Δ) of y'' - τy' + Δy = 0,
 # output is the four unified-form parameters (μ, k, A, B).
+io_dims(::Val{:power_series_variation}, settings::PINNSettings) = io_dims(Val(:power_series), settings)
+
 io_dims(::Val{:eigenvalue}, ::PINNSettings) = (2, 4)
 
 # We need to have a parameter for the PINN to allow us to swap architectures easily
@@ -277,7 +279,7 @@ function loss_fn(p_net, data, coeff_net, st, ode_matrix_flat, boundary_condition
   loss_bc = generate_loss_bc_value(loss_func_settings; ode_buffers=ode_buffers)
 
   # Calculate supervised loss using the plugboard coefficients
-  loss_supervised = generate_loss_supervised_value(loss_func_settings; ode_buffers=ode_buffers)
+  loss_supervised = (settings.representation === :power_series_variation ? generate_loss_supervised_variation : generate_loss_supervised_value)(loss_func_settings; ode_buffers=ode_buffers)
 
   # Optimized objective excludes BC; BC is logged as a diagnostic.
   return loss_pde * settings.pde_weight * settings.num_supervised + settings.supervised_weight * loss_supervised, loss_bc, loss_pde, loss_supervised
@@ -350,7 +352,7 @@ function global_loss_batched(p_net, settings::PINNSettings, coeff_net, st, buf)
   loss_pde, loss_bc, loss_sup = if buf isa BatchEigBuffers
     batched_eigenvalue_losses(out, buf)
   else
-    batched_power_series_losses(out, buf)
+    batched_power_series_losses(out, buf; variation=settings.representation === :power_series_variation)
   end
 
   total = loss_pde * settings.pde_weight * settings.num_supervised +
@@ -655,7 +657,7 @@ function evaluate_solution(settings::PINNSettings, p_trained, coeff_net, st, ben
   UT = true_solutions(buf)
   pde, bc, sup = settings.representation === :eigenvalue ?
     batched_eigenvalue_losses(out, buf) :
-    batched_power_series_losses(out, buf)
+    batched_power_series_losses(out, buf; variation=settings.representation === :power_series_variation)
 
   loss = Float32(settings.pde_weight) * Float32(settings.num_supervised) * Float32(pde) +
          Float32(settings.supervised_weight) * Float32(sup)

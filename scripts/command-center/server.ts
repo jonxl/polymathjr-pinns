@@ -41,7 +41,7 @@ const server = Bun.serve({
     if (path.endsWith(".html")) {
       let page = await file.text();
       const date = page.match(/\d{4}-\d{2}-\d{2}/)?.[0] ?? "Saved study";
-      const count = page.match(/(\d+) paired figures/)?.[1] ?? "—";
+      const count = page.match(/(\d+) (?:paired|comparison) figures/)?.[1] ?? "—";
       if (header) page = page.replace(/<header>[\s\S]*?<\/header>/, header.replaceAll("$date", date).replaceAll("$figure_count", count));
       if (controls) page = page.replace(/<div id="study-controls"[\s\S]*?(?=<div id="comparison-key")/, controls);
       return new Response(page, {headers: {"Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store"}});

@@ -143,7 +143,7 @@ function point_errors(outputs, representation, points, xs)
     errors = Float64[]
     for (i,(t,d)) in enumerate(points)
         o = Float64.(outputs[:,i])
-        predicted = if representation === :power_series
+        predicted = if representation in (:power_series, :power_series_variation)
             [sum(o[n+1] * x^n / factorial(big(n)) for n in 0:length(o)-1) for x in xs]
         elseif representation === :eigenvalue
             mu,k,A,B = o

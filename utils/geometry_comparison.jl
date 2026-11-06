@@ -45,7 +45,7 @@ function paired_panels(power::PanelSet, eigen::PanelSet)
                 end
             end
         end
-        for (rep,panel) in (("power_series",p),("eigenvalue",e))
+        for (rep,panel) in ((String(power.meta["representation"]),p),(String(eigen.meta["representation"]),e))
             push!(panels,Panel(panel.kind,"$rep/$(panel.id)",panel.title,panel.xlabel,panel.ylabel,
                 deepcopy(panel.data),merge(deepcopy(panel.opts),Dict(k=>deepcopy(opts[k]) for k in ("clims","ylims") if haskey(opts,k)))))
         end
@@ -53,4 +53,25 @@ function paired_panels(power::PanelSet, eigen::PanelSet)
     PanelSet("$(power.meta["experiment"]): power series vs eigenvalue",
         merge(deepcopy(power.meta),Dict("representation"=>"comparison","layout_columns"=>2)),panels)
 end
+
+"""Compare three matched experiments with common scales across all three."""
+function paired_panels(power::PanelSet, eigen::PanelSet, variation::PanelSet)
+    pairs = (paired_panels(power, eigen), paired_panels(power, variation))
+    panels = Panel[]
+    for i in eachindex(power.panels)
+        candidates = (pairs[1].panels[2i-1], pairs[1].panels[2i], pairs[2].panels[2i])
+        shared = Dict{String,Any}()
+        for key in ("clims", "ylims")
+            limits = [p.opts[key] for pair in pairs for p in pair.panels[2i-1:2i] if haskey(p.opts,key)]
+            isempty(limits) || (shared[key] = [minimum(v[1] for v in limits), maximum(v[2] for v in limits)])
+        end
+        for panel in candidates
+            push!(panels, Panel(panel.kind, panel.id, panel.title, panel.xlabel, panel.ylabel,
+                deepcopy(panel.data), merge(deepcopy(panel.opts), shared)))
+        end
+    end
+    PanelSet("$(power.meta["experiment"]): three experiments",
+        merge(deepcopy(power.meta), Dict("representation"=>"comparison", "layout_columns"=>3)), panels)
+end
+
 end

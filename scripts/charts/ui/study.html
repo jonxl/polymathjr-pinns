@@ -7,14 +7,14 @@
       name="description"
       content="Paired power-series and eigenvalue ODE generalization experiments, figures and provenance."
     />
-    <title>Dual representation · $title_date</title>
+    <title>Experiment comparison · $title_date</title>
     <link rel="stylesheet" href="ui/study.css" />
   </head>
   <body>
     <header>
       <p class="eyebrow">PINNs · Study command center</p>
-      <h1>Compare solution representations</h1>
-      <p class="facts">$date · $figure_count paired figures</p>
+      <h1>Compare solution experiments</h1>
+      <p class="facts">$date · $figure_count comparison figures</p>
       <p>
         How does each solution representation generalize beyond the equations it
         trained on?
@@ -91,7 +91,7 @@
       </div>
     </div>
     <div id="comparison-key" class="columns">
-      <span>Power series</span><span>Eigenvalue / trace–determinant</span>
+      <span>Power series (default)</span><span>Eigenvalue / trace–determinant</span><span>Power series (variation)</span>
     </div>
     <section id="geometry">
       <h2>Generalization experiments</h2>
@@ -110,16 +110,16 @@
         </tbody>
       </table>
       <p class="facts">
-        $completed_count/9 geometry experiments have completed paired results in
+        $completed_count/15 experiment groups have completed paired results in
         this export.$earlier_note
       </p>
       <details>
-        <summary>Generate the complete geometry study</summary>
+        <summary>Generate all generalization experiments</summary>
         <p>
-          Run from the repository root on the training machine. This trains both
-          representations for every geometry, exports figures after each
+          Run from the repository root on the training machine. This trains all three
+          experiment variants for every experiment, exports figures after each
           completed experiment, and rebuilds this page. Existing completed
-          experiment pairs are reused.
+          experiment results are reused.
         </p>
         <pre>$run_command</pre>
       </details>

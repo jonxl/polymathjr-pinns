@@ -86,6 +86,41 @@ class StudyExportTests(unittest.TestCase):
         missing = exporter.paired_figure_row("model", "Model", {"eigenvalue": "<figure>EV result</figure>"})
         self.assertLess(missing.index("No saved result"), missing.index("EV result"))
 
+    def test_variant_export_includes_three_matched_results(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            import json
+            for rep in exporter.ALL_REPS:
+                data = {"meta": {"representation": rep, "design_sha256": "same"}, "panels": [panel("first")]}
+                (root / f"example_{rep}.json").write_text(json.dumps(data))
+            target, manifest = exporter.build(SimpleNamespace(
+                date="2026-11-06", output=root / "web", panel_data=[root],
+                geometry_root=[], training_root=[]))
+            self.assertIn("Power series (variation)", target.read_text())
+            self.assertEqual(len(manifest["comparisons"][0]["sources"]), 3)
+
+    def test_generalization_job_directories_are_exported(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            import json
+            for rep in exporter.ALL_REPS:
+                job = root / f"gen-transfer-{rep}"
+                job.mkdir()
+                (job / "panelset.json").write_text(json.dumps({
+                    "meta": {"representation": rep, "shape": "transfer"},
+                    "panels": [panel("first")]}))
+                model = job / f"exp-transfer_{rep}-{rep}-train_saddle"
+                model.mkdir()
+                (model / "loss.csv").write_text("iteration,total,bc,pde,supervised\n1,5,1,2,3\n2,4,1,1,3\n")
+            target, manifest = exporter.build(SimpleNamespace(
+                date="2026-11-06", output=root / "web", panel_data=[],
+                geometry_root=[root], training_root=[]))
+            self.assertEqual(len(manifest["comparisons"]), 1)
+            self.assertEqual(len(manifest["comparisons"][0]["sources"]), 3)
+            self.assertEqual(len(manifest["training_histories"]), 3)
+            self.assertEqual(manifest["geometry_status"]["transfer"], "Matched results available")
+            self.assertEqual(target.read_text().count('data-chart-group='), 1)
+
     def test_history_preserves_actual_iterations_and_failed_values(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory)/"loss.csv"

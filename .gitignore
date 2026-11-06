@@ -51,3 +51,6 @@ dev.txt
 # Browser development
 /node_modules/
 !/scripts/charts/ui/study.html
+
+# Archived experiment outputs, excluded from active command-center sources.
+/artifacts/

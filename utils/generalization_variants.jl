@@ -31,6 +31,7 @@ using .GeometryExperiments
 const Experiments = GeometryExperiments.Experiments
 using .Experiments
 const GEOMETRY_EXPERIMENTS = GeometryExperiments.GeneralizationGeometry.EXPERIMENTS
+const ALL_EXPERIMENTS = (:transfer, :extrapolate, :range, :showcase, :gen_radius, :gen_radius_family, GEOMETRY_EXPERIMENTS...)
 
 include("../utils/plugboard.jl")
 using .Plugboard
@@ -83,12 +84,12 @@ function GeneralizationSpec(name::Symbol, representation::Symbol;
                             regions::Vector{Symbol}=REGIONS,
                             Rmax::Int=6, Ng::Union{Int,Nothing}=nothing,
                             n_per_region::Union{Int,Nothing}=nothing, maxiters::Int=3000)
-  name in (:transfer, :extrapolate, :range, :showcase, :gen_radius, GEOMETRY_EXPERIMENTS...) || error(
+  name in ALL_EXPERIMENTS || error(
     "GeneralizationSpec: unknown experiment :$name; expected one of " *
     ":transfer, :extrapolate, :range, :showcase, :gen_radius, $(GEOMETRY_EXPERIMENTS)")
-  representation in (:power_series, :eigenvalue) || error(
-    "GeneralizationSpec: representation must be :power_series or :eigenvalue, got :$representation")
-  controls = name in GEOMETRY_EXPERIMENTS ? GeometryExperiments.GeneralizationGeometry.jeet_controls(name) : (ng=81,n=200)
+  representation in (:power_series, :eigenvalue, :power_series_variation) || error(
+    "GeneralizationSpec: representation must be :power_series, :eigenvalue or :power_series_variation, got :$representation")
+  controls = name in GEOMETRY_EXPERIMENTS ? GeometryExperiments.GeneralizationGeometry.jeet_controls(name) : (ng=81,n=name === :gen_radius_family ? 100 : 200)
   Ng=something(Ng,controls.ng); n_per_region=something(n_per_region,controls.n)
   return GeneralizationSpec(name, representation, copy(regions), Rmax, Ng,
                             n_per_region, maxiters)
@@ -99,7 +100,7 @@ end
 # ---------------------------------------------------------------------------
 
 """
-    default_generalization_specs(; reps=(:power_series, :eigenvalue),
+    default_generalization_specs(; reps=(:power_series, :eigenvalue, :power_series_variation),
                                    experiments=(:transfer, :extrapolate,
                                                 :range, :showcase, :gen_radius),
                                    kwargs...)
@@ -109,7 +110,7 @@ narrow the run; `kwargs...` are forwarded to `GeneralizationSpec` for the
 fields that apply (e.g. `Rmax=4` to use a smaller shell count).
 """
 function default_generalization_specs(;
-                                      reps::Tuple=(:power_series, :eigenvalue),
+                                      reps::Tuple=(:power_series, :eigenvalue, :power_series_variation),
                                       experiments::Tuple=(:transfer, :extrapolate,
                                                           :range, :showcase, :gen_radius),
                                       kwargs...)
@@ -262,9 +263,10 @@ function _run_one_gen_job!(board::TUI.GPUBoard, job::GenJob)
                                        output_root=job.output_dir)
   elseif job.spec.name === :showcase
     Experiments.run_showcase(cfg, tag; output_root=job.output_dir)
-  elseif job.spec.name === :gen_radius
+  elseif job.spec.name in (:gen_radius, :gen_radius_family)
     Experiments.run_gen_radius(cfg, tag;
-                               output_root=job.output_dir, Ng=job.spec.Ng)
+                               output_root=job.output_dir, Ng=job.spec.Ng,
+                               mode=job.spec.name === :gen_radius_family ? :family : :disk)
   else
     error("Internal: spec.name :$(job.spec.name) should have been validated at construction")
   end

@@ -49,8 +49,8 @@ end
 
 @testset "default_generalization_specs: cross-product" begin
   specs = default_generalization_specs()
-  # 2 reps × 5 experiments = 10 specs by default
-  @test length(specs) == 10
+  # 3 variants × 5 experiments = 15 specs by default
+  @test length(specs) == 15
 
   # Custom subset
   specs2 = default_generalization_specs(

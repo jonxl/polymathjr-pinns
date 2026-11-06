@@ -26,9 +26,9 @@ const E=GE.Experiments
         @test JSON.parsefile(joinpath(dir,"cfg.json"))["representation"]=="eigenvalue"
     end
 end
-@testset "Shared training smoke: both representations" begin
+@testset "Shared training smoke: three experiments" begin
     mktempdir() do dir
-        for rep in (:power_series,:eigenvalue)
+        for rep in (:power_series,:eigenvalue,:power_series_variation)
             cfg=E.ExperimentConfig(;representation=rep,N=4,neuron_count=4,
                                   maxiters=1,n_per_region=2,num_points=3)
             result=GE.run_geometry(cfg,:parabola_segment;output_root=dir,ng=2,ntest=3,nx=5)
@@ -40,12 +40,12 @@ end
             checkpoint=joinpath(path,data["models"]["tau-0.0"]["checkpoint"])
             @test isfile(checkpoint)
             net,p,st,metadata=E.PINN.SafeTensorSnapshots.load_any_model(checkpoint)
-            @test size(first(net(zeros(Float32,2,1),p,st)),1)==(rep===:power_series ? 5 : 4)
+            @test size(first(net(zeros(Float32,2,1),p,st)),1)==(rep!==:eigenvalue ? 5 : 4)
         end
         paired=JSON.parsefile(joinpath(dir,"parabola_segment","comparison.json"))
         ps=JSON.parsefile(joinpath(dir,"parabola_segment","power_series","panelset.json"))
         eig=JSON.parsefile(joinpath(dir,"parabola_segment","eigenvalue","panelset.json"))
-        @test length(paired["panels"])==2length(ps["panels"])
+        @test length(paired["panels"])==3length(ps["panels"])
         @test [p["id"] for p in ps["panels"]]==[p["id"] for p in eig["panels"]]
         @test ps["meta"]["design_sha256"]==eig["meta"]["design_sha256"]
     end
@@ -59,7 +59,7 @@ end
     settings=E.settings_for(cfg,dataset;input_encoding=:trace_determinant)
     buf=E.buffers_for(settings,dataset)
     @test vec(buf.X)==[2.,1.]
-    @test vec(buf.DATA)≈[1.,0.,-.5,-1/3,-1/8]
+    @test vec(buf.DATA)≈derivatives
     spec=GE.GeneralizationGeometry.design(:parabola_segment;n=2,ng=2)
     mktempdir() do root
         first_hash=GE.ensure_contract(root,spec,cfg,200)
