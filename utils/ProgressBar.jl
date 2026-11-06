@@ -9,7 +9,8 @@ struct ProgressBarSettings
 end
 
 function Bar(s::ProgressBarSettings; step_size::Int=100, showvalues_fn::Function=() -> [])
-  p_bar = Progress(s.maxiters, desc=s.message)
+  # Keep redirected logs free of redraws; leave Julia logging untouched.
+  p_bar = Progress(s.maxiters, enabled=(stdout isa Base.TTY && stderr isa Base.TTY && isempty(get(ENV, "CI", "")) && isempty(get(ENV, "JULIA_TUI_OFF", ""))), desc=s.message)
   position = Ref(0)
   last_displayed = Ref(-1)
   callback = function (_state, l)

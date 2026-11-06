@@ -422,7 +422,7 @@ function generate_random_ode_dataset(s::Settings, batch_index::Int; exclude_matr
   ode_order = s.ode_order
   poly_degree = s.poly_degree
 
-  p_bar = Progress(s.dataset_size, desc="Generating ODEs...")
+  p_bar = Progress(s.dataset_size, enabled=(stdout isa Base.TTY && stderr isa Base.TTY && isempty(get(ENV, "CI", "")) && isempty(get(ENV, "JULIA_TUI_OFF", ""))), desc="Generating ODEs...")
 
   # Generate dataset_size examples
   for example_k in 1:s.dataset_size

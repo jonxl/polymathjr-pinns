@@ -45,7 +45,7 @@ plain `julia script.jl` invocation even when stdout is attached to a real
 terminal.
 """
 function is_tty()
-  return isa(stdout, Base.TTY) &&
+  return isa(stdout, Base.TTY) && isa(stderr, Base.TTY) &&
          isempty(get(ENV, "CI", "")) &&
          isempty(get(ENV, "JULIA_TUI_OFF", ""))
 end

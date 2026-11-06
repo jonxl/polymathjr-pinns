@@ -275,8 +275,9 @@ end
 # ---------------------------------------------------------------------------
 
 function make_display(device_labels::Vector{String})
-  DISPLAY_MODE == "tui" && return TUI.GPUBoard(device_labels)
-  bars = [ProgressMeter.Progress(1; desc="$(dev) ", offset=i - 1, showspeed=true)
+  # Redirected runs retain job transitions without per-iteration redraws.
+  (DISPLAY_MODE == "tui" || !TUI.is_tty()) && return TUI.GPUBoard(device_labels)
+  bars = [ProgressMeter.Progress(1; enabled=TUI.is_tty(), desc="$(dev) ", offset=i - 1, showspeed=true)
           for (i, dev) in enumerate(device_labels)]
   for i in eachindex(bars)
     ProgressMeter.update!(bars[i], 0; showvalues=[(:job, "idle")])
@@ -288,7 +289,7 @@ display_skip!(board::TUI.GPUBoard, slot, dev, scope_name, representation, maxite
   TUI.update!(board, slot; variant="$(scope_name)-$(representation) already complete ✓",
               iter=maxiters, max_iter=maxiters)
 function display_skip!(bars::Vector{ProgressMeter.Progress}, slot, dev, scope_name, representation, maxiters)
-  bars[slot] = ProgressMeter.Progress(maxiters; desc="$(dev) ", offset=slot - 1, showspeed=true)
+  bars[slot] = ProgressMeter.Progress(maxiters; enabled=TUI.is_tty(), desc="$(dev) ", offset=slot - 1, showspeed=true)
   ProgressMeter.update!(bars[slot], maxiters;
     showvalues=[(:job, "$(scope_name)-$(representation) already complete ✓"),
                 (:epoch, "$(EPOCHS)/$(EPOCHS)")])
@@ -303,7 +304,7 @@ function display_start(board::TUI.GPUBoard, slot, dev, scope_name, representatio
   end
 end
 function display_start(bars::Vector{ProgressMeter.Progress}, slot, dev, scope_name, representation, maxiters, batches)
-  bars[slot] = ProgressMeter.Progress(maxiters; desc="$(dev) ", offset=slot - 1, showspeed=true)
+  bars[slot] = ProgressMeter.Progress(maxiters; enabled=TUI.is_tty(), desc="$(dev) ", offset=slot - 1, showspeed=true)
   return (state, loss) -> begin
     iter = Int(state.iter)
     epoch = iter ÷ batches

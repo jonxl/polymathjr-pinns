@@ -218,7 +218,7 @@ function grid_search_2d(neuron_count, training_dataset, benchmark_dataset,
     for (batch_num, batch) in enumerate(Iterators.partition(all_configs, batch_size))
       # Shared progress bar for the entire batch — all threads advance it together
       total_batch_iters = length(batch) * iters_per_pinn
-      batch_bar = Progress(total_batch_iters, desc="Batch $(batch_num)/$(num_batches) [$(length(batch)) PINNs]  ")
+      batch_bar = Progress(total_batch_iters, enabled=(stdout isa Base.TTY && stderr isa Base.TTY && isempty(get(ENV, "CI", "")) && isempty(get(ENV, "JULIA_TUI_OFF", ""))), desc="Batch $(batch_num)/$(num_batches) [$(length(batch)) PINNs]  ")
 
       # Thread-safe callback: each PINN's iteration ticks the shared bar
       shared_callback = function(state, l)
