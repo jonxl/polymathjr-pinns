@@ -1,0 +1,237 @@
+{
+  "date": "2026-10-31",
+  "source_commit": "bb2a102a",
+  "comparisons": [
+    {
+      "name": "family_disks",
+      "run_group": "dual-representation-exp-2",
+      "mode": "matched_training",
+      "metadata": {
+        "source_commit": "bb2a102a",
+        "truth": "Float64 analytic solution; y(0)=1, y'(0)=0",
+        "design_sha256": "3961dc70e589a713c66cc46220a770c5ef825c4f92fef9f0cb5f2a33b2918768",
+        "mode": "matched_training",
+        "experiment": "family_disks",
+        "plot_nonfinite_cap": 1000000.0,
+        "representation": "power_series",
+        "training_controls": {
+          "x_right": 1.0,
+          "model_seed": 1234,
+          "optimizer": "shared_gpu_adam",
+          "x_left": 0.0,
+          "adam_iterations": 10000,
+          "collocation_points": 50,
+          "network_hidden_width": 64,
+          "solution_points": 200,
+          "power_series_degree": 20
+        }
+      },
+      "sources": [
+        {
+          "path": "/home/archimedes/code/polymathjr/pinns/results/geometry/dual-representation-exp-2/family_disks/power_series/panelset.json",
+          "sha256": "fe252abed1371b8ae1f6c6f611467e5b67c0bf9077238205582f7541fe6368f2"
+        },
+        {
+          "path": "/home/archimedes/code/polymathjr/pinns/results/geometry/dual-representation-exp-2/family_disks/eigenvalue/panelset.json",
+          "sha256": "6598e69e727ca9d5e72e4bd2545aedc97e8dd78d248854371cd6052971bf395d"
+        }
+      ],
+      "figures": [
+        "figures/dual-representation-2026-10-31/01-family_disks-01-center-plane.png",
+        "figures/dual-representation-2026-10-31/01-family_disks-02-center-transfer.png",
+        "figures/dual-representation-2026-10-31/01-family_disks-03-origin-plane.png",
+        "figures/dual-representation-2026-10-31/01-family_disks-04-origin-transfer.png",
+        "figures/dual-representation-2026-10-31/01-family_disks-05-saddle-plane.png",
+        "figures/dual-representation-2026-10-31/01-family_disks-06-saddle-transfer.png",
+        "figures/dual-representation-2026-10-31/01-family_disks-07-stable_node-plane.png",
+        "figures/dual-representation-2026-10-31/01-family_disks-08-stable_node-transfer.png",
+        "figures/dual-representation-2026-10-31/01-family_disks-09-stable_spiral-plane.png",
+        "figures/dual-representation-2026-10-31/01-family_disks-10-stable_spiral-transfer.png",
+        "figures/dual-representation-2026-10-31/01-family_disks-11-unstable_node-plane.png",
+        "figures/dual-representation-2026-10-31/01-family_disks-12-unstable_node-transfer.png",
+        "figures/dual-representation-2026-10-31/01-family_disks-13-unstable_spiral-plane.png",
+        "figures/dual-representation-2026-10-31/01-family_disks-14-unstable_spiral-transfer.png",
+        "figures/dual-representation-2026-10-31/01-family_disks-15-center-local-plane.png",
+        "figures/dual-representation-2026-10-31/01-family_disks-16-center-shells.png",
+        "figures/dual-representation-2026-10-31/01-family_disks-17-center-directional-reach.png",
+        "figures/dual-representation-2026-10-31/01-family_disks-18-origin-local-plane.png",
+        "figures/dual-representation-2026-10-31/01-family_disks-19-origin-shells.png",
+        "figures/dual-representation-2026-10-31/01-family_disks-20-origin-directional-reach.png",
+        "figures/dual-representation-2026-10-31/01-family_disks-21-saddle-local-plane.png",
+        "figures/dual-representation-2026-10-31/01-family_disks-22-saddle-shells.png",
+        "figures/dual-representation-2026-10-31/01-family_disks-23-saddle-directional-reach.png",
+        "figures/dual-representation-2026-10-31/01-family_disks-24-stable_node-local-plane.png",
+        "figures/dual-representation-2026-10-31/01-family_disks-25-stable_node-shells.png",
+        "figures/dual-representation-2026-10-31/01-family_disks-26-stable_node-directional-reach.png",
+        "figures/dual-representation-2026-10-31/01-family_disks-27-stable_spiral-local-plane.png",
+        "figures/dual-representation-2026-10-31/01-family_disks-28-stable_spiral-shells.png",
+        "figures/dual-representation-2026-10-31/01-family_disks-29-stable_spiral-directional-reach.png",
+        "figures/dual-representation-2026-10-31/01-family_disks-30-unstable_node-local-plane.png",
+        "figures/dual-representation-2026-10-31/01-family_disks-31-unstable_node-shells.png",
+        "figures/dual-representation-2026-10-31/01-family_disks-32-unstable_node-directional-reach.png",
+        "figures/dual-representation-2026-10-31/01-family_disks-33-unstable_spiral-local-plane.png",
+        "figures/dual-representation-2026-10-31/01-family_disks-34-unstable_spiral-shells.png",
+        "figures/dual-representation-2026-10-31/01-family_disks-35-unstable_spiral-directional-reach.png",
+        "figures/dual-representation-2026-10-31/01-family_disks-36-geometry-areas.png",
+        "figures/dual-representation-2026-10-31/01-family_disks-37-outside-patch-area.png",
+        "figures/dual-representation-2026-10-31/01-family_disks-38-training-solution-error.png",
+        "figures/dual-representation-2026-10-31/01-family_disks-39-reach-margins.png"
+      ],
+      "training_diagnostics": [],
+      "unavailable_figures": []
+    }
+  ],
+  "geometry_status": {
+    "family_disks": "Matched results available",
+    "spiral_transfer": "Results not found",
+    "pair_transfer": "Results not found",
+    "parabola_segment": "Results not found",
+    "parabola_slide": "Results not found",
+    "parabola_curves": "Results not found",
+    "parabola_bias": "Results not found",
+    "axis_transfer": "Results not found",
+    "axis_sweep": "Results not found"
+  },
+  "training_histories": [
+    {
+      "source": "/home/archimedes/code/polymathjr/pinns/results/geometry/dual-representation-exp-2/family_disks/eigenvalue/exp-origin/loss.csv",
+      "sha256": "7bdb7dfdca2e72c50f57243fb112537cbaa1a23490e8898c4870870df2c645e4",
+      "representation": "eigenvalue",
+      "samples": 101,
+      "first_iteration": 1.0,
+      "last_iteration": 10000.0,
+      "figure": "figures/dual-representation-2026-10-31/training-01-dual-representation-exp-2-family_disks-eigenvalue-exp-origin.png",
+      "data": "figures/dual-representation-2026-10-31/training-01-dual-representation-exp-2-family_disks-eigenvalue-exp-origin.csv"
+    },
+    {
+      "source": "/home/archimedes/code/polymathjr/pinns/results/geometry/dual-representation-exp-2/family_disks/eigenvalue/exp-unstable_spiral/loss.csv",
+      "sha256": "767e2cdef506f6e95337ffd34fc7c5b018a2240ed751fa7977178f7ec0674d43",
+      "representation": "eigenvalue",
+      "samples": 101,
+      "first_iteration": 1.0,
+      "last_iteration": 10000.0,
+      "figure": "figures/dual-representation-2026-10-31/training-02-dual-representation-exp-2-family_disks-eigenvalue-exp-unstable_spiral.png",
+      "data": "figures/dual-representation-2026-10-31/training-02-dual-representation-exp-2-family_disks-eigenvalue-exp-unstable_spiral.csv"
+    },
+    {
+      "source": "/home/archimedes/code/polymathjr/pinns/results/geometry/dual-representation-exp-2/family_disks/eigenvalue/exp-stable_spiral/loss.csv",
+      "sha256": "289c219146ba88b7952491be79f0bf19d79cde6e7ca01f2fe159fc5a80b4a967",
+      "representation": "eigenvalue",
+      "samples": 101,
+      "first_iteration": 1.0,
+      "last_iteration": 10000.0,
+      "figure": "figures/dual-representation-2026-10-31/training-03-dual-representation-exp-2-family_disks-eigenvalue-exp-stable_spiral.png",
+      "data": "figures/dual-representation-2026-10-31/training-03-dual-representation-exp-2-family_disks-eigenvalue-exp-stable_spiral.csv"
+    },
+    {
+      "source": "/home/archimedes/code/polymathjr/pinns/results/geometry/dual-representation-exp-2/family_disks/eigenvalue/exp-unstable_node/loss.csv",
+      "sha256": "64f2f558dc6ef3d65e5fbde4578a89106f58e12e85a64ffa3232eba3d2ab71f0",
+      "representation": "eigenvalue",
+      "samples": 101,
+      "first_iteration": 1.0,
+      "last_iteration": 10000.0,
+      "figure": "figures/dual-representation-2026-10-31/training-04-dual-representation-exp-2-family_disks-eigenvalue-exp-unstable_node.png",
+      "data": "figures/dual-representation-2026-10-31/training-04-dual-representation-exp-2-family_disks-eigenvalue-exp-unstable_node.csv"
+    },
+    {
+      "source": "/home/archimedes/code/polymathjr/pinns/results/geometry/dual-representation-exp-2/family_disks/eigenvalue/exp-center/loss.csv",
+      "sha256": "84766dab9db32c3a4face7b2f0fd6f62994cc19e35c798f9abbf8208dc4152b1",
+      "representation": "eigenvalue",
+      "samples": 101,
+      "first_iteration": 1.0,
+      "last_iteration": 10000.0,
+      "figure": "figures/dual-representation-2026-10-31/training-05-dual-representation-exp-2-family_disks-eigenvalue-exp-center.png",
+      "data": "figures/dual-representation-2026-10-31/training-05-dual-representation-exp-2-family_disks-eigenvalue-exp-center.csv"
+    },
+    {
+      "source": "/home/archimedes/code/polymathjr/pinns/results/geometry/dual-representation-exp-2/family_disks/eigenvalue/exp-stable_node/loss.csv",
+      "sha256": "9f278908a643825a1a1dacfd1accdca11747c38f2d48d9f61c0d7ec21013e684",
+      "representation": "eigenvalue",
+      "samples": 101,
+      "first_iteration": 1.0,
+      "last_iteration": 10000.0,
+      "figure": "figures/dual-representation-2026-10-31/training-06-dual-representation-exp-2-family_disks-eigenvalue-exp-stable_node.png",
+      "data": "figures/dual-representation-2026-10-31/training-06-dual-representation-exp-2-family_disks-eigenvalue-exp-stable_node.csv"
+    },
+    {
+      "source": "/home/archimedes/code/polymathjr/pinns/results/geometry/dual-representation-exp-2/family_disks/eigenvalue/exp-saddle/loss.csv",
+      "sha256": "cbadcdf05522cb61a31dafd7030e5e33d5ab54782a757804e1c33ad4806ba9a9",
+      "representation": "eigenvalue",
+      "samples": 101,
+      "first_iteration": 1.0,
+      "last_iteration": 10000.0,
+      "figure": "figures/dual-representation-2026-10-31/training-07-dual-representation-exp-2-family_disks-eigenvalue-exp-saddle.png",
+      "data": "figures/dual-representation-2026-10-31/training-07-dual-representation-exp-2-family_disks-eigenvalue-exp-saddle.csv"
+    },
+    {
+      "source": "/home/archimedes/code/polymathjr/pinns/results/geometry/dual-representation-exp-2/family_disks/power_series/exp-origin/loss.csv",
+      "sha256": "3fe8dc2dd480c0acac8140b6d1017e8835fe1bb0090b8604c8620e10015152a2",
+      "representation": "power_series",
+      "samples": 101,
+      "first_iteration": 1.0,
+      "last_iteration": 10000.0,
+      "figure": "figures/dual-representation-2026-10-31/training-08-dual-representation-exp-2-family_disks-power_series-exp-origin.png",
+      "data": "figures/dual-representation-2026-10-31/training-08-dual-representation-exp-2-family_disks-power_series-exp-origin.csv"
+    },
+    {
+      "source": "/home/archimedes/code/polymathjr/pinns/results/geometry/dual-representation-exp-2/family_disks/power_series/exp-unstable_spiral/loss.csv",
+      "sha256": "84f8245e03e47076ea2f0b6919cb2cece2d311dc122e61290bbf61d9f4984ef6",
+      "representation": "power_series",
+      "samples": 101,
+      "first_iteration": 1.0,
+      "last_iteration": 10000.0,
+      "figure": "figures/dual-representation-2026-10-31/training-09-dual-representation-exp-2-family_disks-power_series-exp-unstable_spiral.png",
+      "data": "figures/dual-representation-2026-10-31/training-09-dual-representation-exp-2-family_disks-power_series-exp-unstable_spiral.csv"
+    },
+    {
+      "source": "/home/archimedes/code/polymathjr/pinns/results/geometry/dual-representation-exp-2/family_disks/power_series/exp-stable_spiral/loss.csv",
+      "sha256": "be50746c5915d816ccecb402349a92f0ee460ef921c4bfbc1fb89a66f9504511",
+      "representation": "power_series",
+      "samples": 101,
+      "first_iteration": 1.0,
+      "last_iteration": 10000.0,
+      "figure": "figures/dual-representation-2026-10-31/training-10-dual-representation-exp-2-family_disks-power_series-exp-stable_spiral.png",
+      "data": "figures/dual-representation-2026-10-31/training-10-dual-representation-exp-2-family_disks-power_series-exp-stable_spiral.csv"
+    },
+    {
+      "source": "/home/archimedes/code/polymathjr/pinns/results/geometry/dual-representation-exp-2/family_disks/power_series/exp-unstable_node/loss.csv",
+      "sha256": "d414370308aea4866692dd672a9c80db79781e17d3023126963c55bdcfd05e74",
+      "representation": "power_series",
+      "samples": 101,
+      "first_iteration": 1.0,
+      "last_iteration": 10000.0,
+      "figure": "figures/dual-representation-2026-10-31/training-11-dual-representation-exp-2-family_disks-power_series-exp-unstable_node.png",
+      "data": "figures/dual-representation-2026-10-31/training-11-dual-representation-exp-2-family_disks-power_series-exp-unstable_node.csv"
+    },
+    {
+      "source": "/home/archimedes/code/polymathjr/pinns/results/geometry/dual-representation-exp-2/family_disks/power_series/exp-center/loss.csv",
+      "sha256": "dea59958976383f4cb5f387a0968528ce65ea7659e89d784624754eecc5dfcf9",
+      "representation": "power_series",
+      "samples": 101,
+      "first_iteration": 1.0,
+      "last_iteration": 10000.0,
+      "figure": "figures/dual-representation-2026-10-31/training-12-dual-representation-exp-2-family_disks-power_series-exp-center.png",
+      "data": "figures/dual-representation-2026-10-31/training-12-dual-representation-exp-2-family_disks-power_series-exp-center.csv"
+    },
+    {
+      "source": "/home/archimedes/code/polymathjr/pinns/results/geometry/dual-representation-exp-2/family_disks/power_series/exp-stable_node/loss.csv",
+      "sha256": "94fc69018b568d6a74fb058bf02f2ddf8947bf95b19d49ddc030f88d3a393edf",
+      "representation": "power_series",
+      "samples": 101,
+      "first_iteration": 1.0,
+      "last_iteration": 10000.0,
+      "figure": "figures/dual-representation-2026-10-31/training-13-dual-representation-exp-2-family_disks-power_series-exp-stable_node.png",
+      "data": "figures/dual-representation-2026-10-31/training-13-dual-representation-exp-2-family_disks-power_series-exp-stable_node.csv"
+    },
+    {
+      "source": "/home/archimedes/code/polymathjr/pinns/results/geometry/dual-representation-exp-2/family_disks/power_series/exp-saddle/loss.csv",
+      "sha256": "cad697de60175a8b9329cbf0b0bd694816729e15acd35bb40d3e542bdbc51dc1",
+      "representation": "power_series",
+      "samples": 101,
+      "first_iteration": 1.0,
+      "last_iteration": 10000.0,
+      "figure": "figures/dual-representation-2026-10-31/training-14-dual-representation-exp-2-family_disks-power_series-exp-saddle.png",
+      "data": "figures/dual-representation-2026-10-31/training-14-dual-representation-exp-2-family_disks-power_series-exp-saddle.csv"
+    }
+  ]
+}

@@ -20,6 +20,7 @@ import os
 from pathlib import Path
 import re
 import shutil
+from string import Template
 
 os.environ.setdefault("MPLCONFIGDIR", "/tmp/pinns-study-matplotlib")
 os.environ.setdefault("XDG_CACHE_HOME", "/tmp/pinns-study-cache")
@@ -29,6 +30,17 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 ROOT = Path(__file__).resolve().parents[2]
+UI_DIR = Path(__file__).with_name("ui")
+
+
+def export_browser_assets(output):
+    destination = output / "ui"
+    destination.mkdir(parents=True, exist_ok=True)
+    for source in (UI_DIR / "study.css", UI_DIR / "dist/study.js"):
+        if not source.is_file():
+            raise FileNotFoundError(f"Missing browser asset {source}; run bun install --frozen-lockfile and bun run build.")
+        shutil.copyfile(source, destination / source.name)
+
 REPS = ("power_series", "eigenvalue")
 LABELS = ("Power series", "Eigenvalue")
 EXPERIMENTS = {
@@ -198,6 +210,19 @@ def values(panel):
     return np.concatenate([np.asarray(s[key], dtype=float) for s in data["series"]])
 
 
+RELATIVE_CONTOURS = 5
+FAILED_POINT_CAP = 1e6  # Matches plot_nonfinite_cap in saved geometry panels.
+
+
+def relative_levels(z, log_color):
+    """Evenly spaced levels across one surface's own range, ignoring failed points."""
+    cap = np.log10(FAILED_POINT_CAP) if log_color else FAILED_POINT_CAP
+    finite = z[np.isfinite(z) & (z < cap)]
+    if finite.size == 0 or finite.min() == finite.max():
+        return []
+    return np.linspace(finite.min(), finite.max(), RELATIVE_CONTOURS+2)[1:-1]
+
+
 def is_training_diagnostic(panel):
     """Raw optimization components do not establish comparative accuracy."""
     text = " ".join(str(panel.get(key, "")) for key in ("id", "title", "ylabel")).lower()
@@ -244,6 +269,10 @@ def render_pair(pair, destination, labels=LABELS):
                 t = np.linspace(min(xs), max(xs), 400)
                 ax.plot(t, t*t/4, color="black", linewidth=.8, linestyle="--", label="Δ = τ²/4")
                 ax.set_ylim(min(ys), max(ys))
+                levels = relative_levels(z, opts.get("log_color")) if opts.get("contour_levels") else []
+                if len(levels):
+                    contours = ax.contour(xs, ys, z, levels=levels, colors="white", linewidths=.5, linestyles="solid", alpha=.7)
+                    ax.clabel(contours, fmt=lambda c: f"{10**c if opts.get('log_color') else c:.3g}", fontsize=7)
                 for level in opts.get("contour_levels") or []:
                     c = np.log10(max(level, opts.get("floor_val", 1e-20))) if opts.get("log_color") else level
                     if np.nanmin(z) < c < np.nanmax(z):
@@ -317,42 +346,21 @@ def render_pair(pair, destination, labels=LABELS):
 
 
 def caption(panel):
+    note = ""
+    if panel["kind"] == "heatmap" and panel.get("opts", {}).get("contour_levels"):
+        note = " Thin lines step evenly across each panel's own error range, so compare panels by their labels."
     if panel.get("opts", {}).get("caption"):
-        return panel["opts"]["caption"]
+        return panel["opts"]["caption"]+note
     identity = panel["id"]
     if identity == "genradius_areas":
         return "Estimated area with relative solution error below ε = 0.1 (10%). Zero means no sampled point meets this threshold; it does not mean missing data."
     if "sup" in identity or "component" in identity:
         return "Training diagnostics. Supervision is in coefficient space for power series and solution space for eigenvalue models; these component magnitudes are not equivalent accuracy metrics."
     if panel["kind"] == "heatmap":
-        return "Both panels share one color scale. Contours appear only where their threshold crosses the saved data. Grid resolution is the saved evaluation resolution."
+        return "Both panels share one color scale. Contours appear only where their threshold crosses the saved data. Grid resolution is the saved evaluation resolution."+note
     return "Matching measurements with shared vertical limits. Raw saved values are preserved; changing the display does not retrain either model."
 
 
-STYLE = """
-body{max-width:1500px;margin:28px auto;padding:0 24px;font:15px/1.6 system-ui;color:#24313a}
-h1,h2,h3{text-wrap:balance}p{text-wrap:pretty}a{color:#245b91}nav{display:flex;gap:8px 18px;flex-wrap:wrap;margin:24px 0}
-header{border-bottom:1px solid #d8dfe3;padding-bottom:18px}.facts,table{font-variant-numeric:tabular-nums}
-figure{margin:24px 0 42px}img{width:100%;display:block}figcaption,.facts{color:#53616b}
-section{padding-top:18px;border-top:1px solid #d8dfe3;margin-top:30px}table{border-collapse:collapse;width:100%}
-th,td{text-align:left;padding:9px;border-bottom:1px solid #d8dfe3}code{overflow-wrap:anywhere}pre{white-space:pre-wrap;background:#f1f5f9;padding:16px}
-summary{cursor:pointer}a:focus-visible,summary:focus-visible{outline:2px solid #245b91;outline-offset:3px}
-[hidden]{display:none!important}
-#study-controls{padding:18px 0;border-bottom:1px solid #d8dfe3}
-.view-buttons{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:16px}
-button,select{font:inherit;color:inherit;background:white;border:1px solid #cbd5e1;border-radius:5px;padding:8px 12px}
-button{cursor:pointer}button[aria-pressed=true]{color:#245b91;background:#eaf2f8;border-color:#245b91}
-button:disabled{opacity:.45;cursor:default}button:focus-visible,select:focus-visible,input:focus-visible{outline:2px solid #245b91;outline-offset:3px}
-.control-row{display:flex;gap:16px;align-items:end;flex-wrap:wrap}.control-field{display:flex;flex-direction:column;gap:5px;min-width:180px;max-width:100%}
-.control-field select{max-width:100%;text-overflow:ellipsis}.chart-picker{flex:1}.step-buttons{display:flex;gap:8px}
-#figure-status{margin:10px 0 0;color:#53616b;font-variant-numeric:tabular-nums}
-@media print{#study-controls,#fallback-navigation{display:none}figure{break-inside:avoid}body{max-width:none}}
-.columns{display:grid;grid-template-columns:1fr 1fr;gap:20px;font-weight:600;padding:12px 0}.status{padding:12px;background:#f1f5f9}
-.figure-pair{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:20px;align-items:start}
-.figure-pair figure{min-width:0}.figure-pair img{min-width:0}.figure-pair .facts{overflow-wrap:anywhere}
-#comparison-key{position:sticky;top:0;z-index:10;background:white;border-bottom:1px solid #d8dfe3}
-@media(max-width:700px){body{padding:0 12px}figure{overflow-x:auto}figure img{min-width:800px}th,td{padding:5px;font-size:13px}}
-"""
 
 
 def build(args):
@@ -454,40 +462,23 @@ def build(args):
         for key, group in diagnostics.items():
             diagnostic_section += paired_figure_row(key, group['label'], group['figures'])
         diagnostic_section += '</section>'
-    page = f'''<!doctype html>
-<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<meta name="description" content="Paired power-series and eigenvalue ODE generalization experiments, figures and provenance.">
-<title>Dual representation · {date}</title><style>{STYLE}</style></head><body>
-<header><h1>Dual representation</h1><p class="facts">{date} · {total} paired figures</p>
-<p>How does each solution representation generalize beyond the equations it trained on?</p>
-<p>Compare reconstructed solution errors, transfer, and reach at the same tolerance. Training losses are separate diagnostics.</p>
-</header>
-<nav id="fallback-navigation" aria-label="Study sections"><a href="#geometry">Experiments</a> · {nav}{' · <a href="#training-history">Training histories</a>' if histories else ''}{' · <a href="#training-diagnostics">Loss diagnostics</a>' if diagnostic_section else ''}</nav>
-<div id="study-controls" hidden>
-<div class="view-buttons" role="group" aria-label="Study view">
-<button type="button" data-study-view="generalization" aria-pressed="false">Generalization</button>
-<button type="button" data-study-view="training" aria-pressed="false">Training histories</button>
-<button type="button" data-study-view="diagnostics" aria-pressed="false">Loss diagnostics</button>
-<button type="button" data-study-view="overview" aria-pressed="false">Experiment guide</button></div>
-<div id="run-field" class="control-field"><label for="run-select">Experiment folder</label><select id="run-select"></select></div>
-<div id="experiment-field" class="control-field"><label for="experiment-select">Experiment</label><select id="experiment-select"></select></div>
-<div id="chart-controls"><div class="control-row">
-<div class="control-field"><label for="chart-type-select">Chart type</label><select id="chart-type-select"></select></div>
-<div class="control-field"><label for="region-select">Training region</label><select id="region-select"></select></div>
-<div class="control-field chart-picker"><label id="chart-label" for="chart-select">Chart</label><select id="chart-select"></select></div>
-<div class="step-buttons"><button type="button" id="previous-chart">Previous</button><button type="button" id="next-chart">Next</button></div>
-<label><input id="show-all" type="checkbox"> Show all matching charts</label></div>
-<p id="figure-status" role="status" aria-live="polite"></p></div></div>
-<div id="comparison-key" class="columns"><span>Power series</span><span>Eigenvalue / trace–determinant</span></div>
-<section id="geometry"><h2>Generalization experiments</h2><p>Vary where we train, then measure solution error on held-out equations.</p>
-<table><thead><tr><th>Experiment</th><th>What we measure</th></tr></thead><tbody>{''.join(rows)}</tbody></table>
-<p class="facts">{completed}/9 geometry experiments have completed paired results in this export. The figures below also include earlier saved experiments.</p>
-<details><summary>Generate the complete geometry study</summary><p>Run from the repository root on the training machine. This trains both representations for every geometry, exports figures after each completed experiment, and rebuilds this page. Existing completed experiment pairs are reused.</p><pre>{esc(command)}</pre></details></section>
-{''.join(section for _, _, section in sections)}
-{histories}
-{diagnostic_section}
-<footer><p><a href="{manifest_path.relative_to(output).as_posix()}">Study manifest and source checksums</a> · Figures and data are stored beside this page; no server or internet connection is required.</p></footer>
-<script>{Path(__file__).with_name('study_navigation.js').read_text()}</script></body></html>'''
+    export_browser_assets(output)
+    page = Template((UI_DIR / "study.html").read_text()).substitute(
+        title_date=date,
+        date=date,
+        figure_count=total,
+        section_links=nav,
+        training_link=' · <a href="#training-history">Training histories</a>' if histories else '',
+        diagnostics_link=' · <a href="#training-diagnostics">Loss diagnostics</a>' if diagnostic_section else '',
+        experiment_rows=''.join(rows),
+        completed_count=completed,
+        earlier_note=' The figures below also include earlier saved experiments.' if any((not pair[3] for pair in pairs)) else '',
+        run_command=esc(command),
+        sections=''.join((section for _, _, section in sections)),
+        histories=histories,
+        diagnostics=diagnostic_section,
+        manifest_url=manifest_path.relative_to(output).as_posix(),
+    )
     target = output / f"{stem}.html"
     target.write_text(page)
     print(f"{target}\n{total} paired figures; {completed}/9 matched geometry experiments")
@@ -502,7 +493,7 @@ def main():
     parser.add_argument("--geometry-root", action="append", type=Path, default=[], help="Recursively discover paired geometry panelsets; repeatable")
     parser.add_argument("--training-root", action="append", type=Path, help="Discover base-model loss.csv histories; repeatable")
     args = parser.parse_args()
-    args.panel_data = args.panel_data if args.panel_data is not None else [ROOT / "data"]
+    args.panel_data = args.panel_data if args.panel_data is not None else []
     args.training_root = args.training_root if args.training_root is not None else [ROOT / "results/dual-rep-studies"]
     if not args.geometry_root:
         args.geometry_root = [ROOT / "results/geometry"]

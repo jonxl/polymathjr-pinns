@@ -1,5 +1,6 @@
 """Run with a Python environment containing matplotlib and numpy."""
 import copy
+from types import SimpleNamespace
 import importlib.util
 from pathlib import Path
 import tempfile
@@ -26,6 +27,24 @@ def sets():
 
 
 class StudyExportTests(unittest.TestCase):
+    def test_export_ships_external_browser_assets(self):
+        with tempfile.TemporaryDirectory() as directory:
+            target, manifest = exporter.build(SimpleNamespace(
+                date="2026-11-03", output=Path(directory),
+                panel_data=[], geometry_root=[], training_root=[],
+            ))
+            page = target.read_text()
+            self.assertNotIn("<style>", page)
+            self.assertNotIn("<script>", page)
+            self.assertNotIn("$date", page)
+            self.assertIn('href="ui/study.css"', page)
+            self.assertIn('src="ui/study.js"', page)
+            self.assertEqual((target.parent / "ui/study.css").read_bytes(),
+                             (exporter.UI_DIR / "study.css").read_bytes())
+            self.assertEqual((target.parent / "ui/study.js").read_bytes(),
+                             (exporter.UI_DIR / "dist/study.js").read_bytes())
+
+
     def test_disk_overlay_and_radial_guides_are_rendered(self):
         p = {"id": "saddle-plane", "title": "Saddle", "kind": "heatmap", "xlabel": "τ", "ylabel": "Δ",
              "opts": {"log_color": True, "floor_val": 1e-6, "contour_levels": [.1]},
@@ -48,6 +67,14 @@ class StudyExportTests(unittest.TestCase):
                 self.assertIn("patch edge", fig.axes[0].get_legend_handles_labels()[1])
                 self.assertLess(fig.axes[0].get_ylim()[0], .1)
             exporter.plt.close(fig)
+
+    def test_relative_contours_follow_each_surface_range(self):
+        z = exporter.np.log10(exporter.np.array([[.01, 10.], [1., exporter.FAILED_POINT_CAP]]))
+        levels = 10**exporter.relative_levels(z, True)
+        self.assertEqual(len(levels), exporter.RELATIVE_CONTOURS)
+        self.assertTrue(((levels > .01) & (levels < 10.)).all())
+        self.assertAlmostEqual(levels[1], .1)
+        self.assertEqual(len(exporter.relative_levels(exporter.np.zeros((2, 2)), True)), 0)
 
     def test_paired_layout_always_places_power_series_first(self):
         row = exporter.paired_figure_row("model", "Model", {

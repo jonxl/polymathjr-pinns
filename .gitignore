@@ -47,3 +47,7 @@ Thumbs.db
 
 # Local development commands
 dev.txt
+
+# Browser development
+/node_modules/
+!/scripts/charts/ui/study.html

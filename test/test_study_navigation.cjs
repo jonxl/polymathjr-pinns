@@ -2,6 +2,8 @@
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const vm = require('node:vm');
+const {test} = require('bun:test');
+test('study navigation, filters, linked sections, and printing', () => {
 class Element {
   constructor(text = '') { this.textContent = text; this.dataset = {}; this.events = {}; this.children = []; this.selectedIndex = -1; }
   addEventListener(event, fn) { this.events[event] = fn; }
@@ -25,6 +27,7 @@ const section = (id, title, figures) => {
 const sections = [
   section('geometry', 'Guide', []),
   section('03-shared_genradius_family', 'Family', [figure('Saddle'), figure('Center'), figure('Area')]),
+  section('04-shared_range', 'Range', [figure('Range')]),
   section('training-history', 'Training', [figure('PS global', 'global'), figure('EV global', 'global'), figure('PS saddle', 'saddle'), figure('EV saddle', 'saddle')]),
   section('training-diagnostics', 'Diagnostics', [figure('PS supervision', 'supervision'), figure('EV supervision', 'supervision')]),
 ];
@@ -43,7 +46,7 @@ const context = {
   Option: function(text, value) { this.textContent = text; this.value = value; },
   location, history: {replaceState: (_, __, hash) => { location.hash = hash; }},
 };
-vm.runInNewContext(fs.readFileSync(require('node:path').join(__dirname, '../scripts/charts/study_navigation.js'), 'utf8'), context);
+vm.runInNewContext(fs.readFileSync(require('node:path').join(__dirname, '../scripts/charts/ui/dist/study.js'), 'utf8'), context);
 const visible = () => sections.filter(s => !s.hidden).flatMap(s => s.figures.filter(f => !f.hidden)).map(f => f.textContent);
 assert.deepEqual(visible(), ['Saddle']);
 controls['next-chart'].fire('click');
@@ -61,7 +64,7 @@ assert.deepEqual(visible(), ['Center']); // Preserve the selected chart when ret
 location.hash = '#training-diagnostics'; events.hashchange();
 assert.deepEqual(visible(), ['PS supervision', 'EV supervision']);
 assert.equal(controls['comparison-key'].hidden, false);
-events.beforeprint(); assert.equal(visible().length, 9);
+events.beforeprint(); assert.equal(visible().length, 10);
 events.afterprint(); assert.deepEqual(visible(), ['PS supervision', 'EV supervision']);
 buttons.find(b => b.dataset.studyView === 'overview').fire('click');
 assert.equal(controls['chart-controls'].hidden, true);
@@ -76,10 +79,14 @@ assert.deepEqual(visible(), []);
 assert.equal(controls['figure-status'].textContent, 'No charts match these filters.');
 controls['region-select'].value = ''; controls['region-select'].fire('change');
 assert.deepEqual(visible(), ['Area']);
+assert.equal(controls['run-field'].hidden, true);
 sections[1].dataset.runGroup = 'dual-representation-exp-1';
 buttons.find(b => b.dataset.studyView === 'generalization').fire('click');
+assert.equal(controls['run-field'].hidden, false);
 controls['run-select'].value = 'dual-representation-exp-1';
 controls['run-select'].fire('change');
 assert.equal(controls['run-select'].value, 'dual-representation-exp-1');
 assert.equal(controls['experiment-select'].children.length, 1);
 assert.equal(sections[1].hidden, false);
+
+});

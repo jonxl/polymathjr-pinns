@@ -1,0 +1,137 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <meta
+      name="description"
+      content="Paired power-series and eigenvalue ODE generalization experiments, figures and provenance."
+    />
+    <title>Dual representation · $title_date</title>
+    <link rel="stylesheet" href="ui/study.css" />
+  </head>
+  <body>
+    <header>
+      <p class="eyebrow">PINNs · Study command center</p>
+      <h1>Compare solution representations</h1>
+      <p class="facts">$date · $figure_count paired figures</p>
+      <p>
+        How does each solution representation generalize beyond the equations it
+        trained on?
+      </p>
+      <p>
+        Compare reconstructed solution errors, transfer, and reach at the same
+        tolerance. Training losses are separate diagnostics.
+      </p>
+    </header>
+    <nav id="fallback-navigation" aria-label="Study sections">
+      <a href="#geometry">Experiments</a> ·
+      $section_links$training_link$diagnostics_link
+    </nav>
+    <div id="study-controls" hidden>
+      <p class="control-heading">1. Choose what to explore</p>
+      <div class="view-buttons" role="group" aria-label="Study view">
+        <button
+          type="button"
+          data-study-view="generalization"
+          aria-pressed="false"
+        >
+          Solution accuracy
+        </button>
+        <button type="button" data-study-view="training" aria-pressed="false">
+          Training histories
+        </button>
+        <button
+          type="button"
+          data-study-view="diagnostics"
+          aria-pressed="false"
+        >
+          Loss diagnostics
+        </button>
+        <button type="button" data-study-view="overview" aria-pressed="false">
+          Experiment guide
+        </button>
+      </div>
+      <p class="control-heading">2. Choose an experiment</p>
+      <div class="experiment-controls">
+      <div id="run-field" class="control-field">
+        <label for="run-select">Saved run</label
+        ><select id="run-select"></select>
+      </div>
+      <div id="experiment-field" class="control-field">
+        <label for="experiment-select">Experiment</label
+        ><select id="experiment-select"></select>
+      </div>
+      </div>
+      <div id="chart-controls">
+        <p class="control-heading">3. Explore the charts</p>
+        <div class="control-row">
+          <div class="control-field">
+            <label for="chart-type-select">Chart type</label
+            ><select id="chart-type-select"></select>
+          </div>
+          <div class="control-field">
+            <label for="region-select">Training region</label
+            ><select id="region-select"></select>
+          </div>
+          <div class="control-field chart-picker">
+            <label id="chart-label" for="chart-select">Chart</label
+            ><select id="chart-select"></select>
+          </div>
+          <div class="step-buttons">
+            <button type="button" id="previous-chart">Previous</button
+            ><button type="button" id="next-chart">Next</button>
+          </div>
+          <label
+            ><input id="show-all" type="checkbox" /> Show all matching
+            charts</label
+          >
+        </div>
+        <p id="figure-status" role="status" aria-live="polite"></p>
+      </div>
+    </div>
+    <div id="comparison-key" class="columns">
+      <span>Power series</span><span>Eigenvalue / trace–determinant</span>
+    </div>
+    <section id="geometry">
+      <h2>Generalization experiments</h2>
+      <p>
+        Vary where we train, then measure solution error on held-out equations.
+      </p>
+      <table>
+        <thead>
+          <tr>
+            <th>Experiment</th>
+            <th>What we measure</th>
+          </tr>
+        </thead>
+        <tbody>
+          $experiment_rows
+        </tbody>
+      </table>
+      <p class="facts">
+        $completed_count/9 geometry experiments have completed paired results in
+        this export.$earlier_note
+      </p>
+      <details>
+        <summary>Generate the complete geometry study</summary>
+        <p>
+          Run from the repository root on the training machine. This trains both
+          representations for every geometry, exports figures after each
+          completed experiment, and rebuilds this page. Existing completed
+          experiment pairs are reused.
+        </p>
+        <pre>$run_command</pre>
+      </details>
+    </section>
+    $sections $histories $diagnostics
+    <footer>
+      <p>
+        <a href="$manifest_url">Study manifest and source checksums</a> ·
+        Figures and data are stored beside this page; no server or internet
+        connection is required.
+      </p>
+    </footer>
+    <script defer src="ui/study.js"></script>
+  </body>
+</html>

@@ -246,3 +246,43 @@ If you use this code in your research, please cite:
   url = {https://github.com/jonxlegasa/polymathjr-pinns-jon-jeet}
 }
 ```
+
+
+## Study viewer frontend
+
+Start the local command center from the repository root:
+
+```bash
+bun run command-center
+```
+
+Open `http://127.0.0.1:8000`. Use `bun run command-center --port 8080`
+for a different port. Bun builds the TypeScript frontend on startup and serves
+the latest saved study with the current HTML template and CSS. Restart after
+TypeScript or template changes; refresh after CSS edits. Viewing saved studies
+requires no Python or `uv`. Generating new figures still uses the exporter below.
+The local server lives in `scripts/command-center/server.ts`.
+
+The study command center uses a separate HTML template, CSS, and TypeScript under
+`scripts/charts/ui/`. Use Bun 1.2.18 for frontend dependencies, builds, and tests:
+
+```bash
+bun install --frozen-lockfile
+bun run check
+bun run build
+bun run test
+```
+
+Use `bun run watch` while editing TypeScript. Chart classification lives in
+`charts.ts`; navigation and filters live in `navigation.ts`. Edit `study.html`
+for the page layout and `study.css` for styling.
+
+The Python exporter still runs with
+`uv run scripts/charts/export_dual_study.py --geometry-root results/geometry`.
+It copies the CSS and compiled JavaScript beside each generated report. Re-export
+after frontend changes and distribute the HTML together with its `ui/` and
+`figures/` directories. Reports remain usable offline, and the complete report
+remains readable without JavaScript. Julia training commands are unchanged.
+
+Commit `bun.lock` with dependency changes and `scripts/charts/ui/dist/study.js`
+with frontend changes so report exports need no frontend installation.
