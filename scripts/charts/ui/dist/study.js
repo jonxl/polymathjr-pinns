@@ -38,6 +38,8 @@
     const controls = document.getElementById("study-controls");
     const run = document.getElementById("run-select");
     let rememberedRun = "";
+    const degree = document.getElementById("degree-select");
+    let rememberedDegree = "";
     const experiment = document.getElementById("experiment-select");
     const chart = document.getElementById("chart-select");
     const all = document.getElementById("show-all");
@@ -158,6 +160,22 @@
         if (run.selectedIndex < 0)
           run.value = "";
         available = available.filter((s) => !run.value || (s.dataset.runGroup || "Earlier saved experiments") === run.value);
+        const degrees = [
+          ...new Set(available.map((s) => s.dataset.degree || "").filter(Boolean))
+        ].sort((a, b) => Number(a) - Number(b));
+        document.getElementById("degree-field").hidden = degrees.length < 2;
+        options(degree, [
+          ["", "All degrees"],
+          ...degrees.map((n) => [n, `N = ${n}`])
+        ]);
+        if (linkedSection && (linkedSection.dataset.degree || "") !== rememberedDegree)
+          rememberedDegree = "";
+        degree.value = degrees.length < 2 ? "" : rememberedDegree;
+        if (degree.selectedIndex < 0)
+          degree.value = "";
+        available = available.filter((s) => !degree.value || s.dataset.degree === degree.value);
+      } else {
+        document.getElementById("degree-field").hidden = true;
       }
       buttons.forEach((button) => button.setAttribute("aria-pressed", String(button.dataset.studyView === view)));
       options(experiment, available.map((section) => [
@@ -175,6 +193,10 @@
     });
     run.addEventListener("change", () => {
       rememberedRun = run.value;
+      showView("generalization");
+    });
+    degree.addEventListener("change", () => {
+      rememberedDegree = degree.value;
       showView("generalization");
     });
     experiment.addEventListener("change", () => showSection());

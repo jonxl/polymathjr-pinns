@@ -76,6 +76,26 @@ def read(path):
     return json.loads(path.read_text())
 
 
+DEGREE_FOLDER = re.compile(r"degree-(\d+)")
+
+
+def folder_degree(path):
+    """Power-series degree of a result saved inside a degree-sweep folder, else None."""
+    for part in reversed(Path(path).parts):
+        match = DEGREE_FOLDER.fullmatch(part)
+        if match:
+            return int(match.group(1))
+    return None
+
+
+def comparison_labels(degree):
+    """Column labels. Only the power series has a degree; the eigenvalue model has no coefficients."""
+    if degree is None:
+        return ALL_LABELS
+    return (f"Power series · N = {degree} (uniform coefficient weights)", "Eigenvalue",
+            f"Power series · N = {degree} (descending coefficient weights)")
+
+
 def slug(value):
     return re.sub(r"[^a-zA-Z0-9_-]+", "-", value).strip("-")
 
@@ -90,14 +110,16 @@ def load_training_history(path):
         reader = csv.DictReader(stream)
         if not set(fields).issubset(reader.fieldnames or []):
             raise ValueError(f"Missing loss columns: {path}")
-        fields = fields + tuple(k for k in ("weighted_pde", "weighted_supervised") if k in reader.fieldnames)
+        fields = fields + tuple(k for k in ("weighted_pde", "weighted_bc", "weighted_supervised") if k in reader.fieldnames)
         rows = [[float(row[k]) for k in fields] for row in reader if row.get("iteration", "").strip()]
     if not rows:
         raise ValueError(f"Empty training history: {path}")
     history = dict(zip(fields, np.asarray(rows, dtype=float).T))
     if all(k in history for k in ("weighted_pde", "weighted_supervised")):
-        finite = np.isfinite(history["total"]) & np.isfinite(history["weighted_pde"]) & np.isfinite(history["weighted_supervised"])
-        if not np.allclose(history["total"][finite], (history["weighted_pde"] + history["weighted_supervised"])[finite], rtol=1e-5, atol=1e-8):
+        # Histories written before the initial-condition term joined the objective have no weighted_bc column.
+        contributions = sum(history[k] for k in ("weighted_pde", "weighted_bc", "weighted_supervised") if k in history)
+        finite = np.isfinite(history["total"]) & np.isfinite(contributions)
+        if not np.allclose(history["total"][finite], contributions[finite], rtol=1e-5, atol=1e-8):
             raise ValueError(f"Weighted contributions do not match total: {path}")
     iterations = history["iteration"]
     if not np.all(np.isfinite(iterations)) or np.any(np.diff(iterations) <= 0):
@@ -112,8 +134,9 @@ def render_training_history(history, rep, title, destination):
     ax = axes[-1, 0]
     if weighted:
         objective = axes[0, 0]
-        for key, label in (("total", "Total objective"), ("weighted_pde", "Weighted PDE contribution"), ("weighted_supervised", "Weighted supervision contribution")):
-            objective.plot(history["iteration"], history[key], label=label)
+        for key, label in (("total", "Total objective"), ("weighted_pde", "Weighted PDE contribution"), ("weighted_bc", "Weighted initial-condition contribution"), ("weighted_supervised", "Weighted supervision contribution")):
+            if key in history:
+                objective.plot(history["iteration"], history[key], label=label)
         objective.set(title=title + " · optimized objective", xlabel="Training iteration", ylabel="Weighted loss")
         objective.set_yscale("symlog", linthresh=1e-8)
         objective.legend(); objective.grid(alpha=.2)
@@ -121,7 +144,7 @@ def render_training_history(history, rep, title, destination):
     if rep == "power_series_variation":
         supervised = "Coefficient supervision (descending weights)"
     labels = {"total": "Total objective (weighted)", "pde": "PDE residual (raw)",
-              "bc": "Initial conditions (diagnostic)", "supervised": supervised}
+              "bc": "Initial conditions (raw)" if "weighted_bc" in history else "Initial conditions (diagnostic)", "supervised": supervised}
     if weighted:
         labels.pop("total")
     colors = {"total": "#24313a", "pde": "#245b91", "bc": "#b45309", "supervised": "#15803d"}
@@ -177,6 +200,9 @@ def training_section(roots, assets, output):
             model_name = '/'.join(model_parts[-3:-1] if 'family' in model_parts else model_parts[-2:-1])
             if model_parts[-1] not in ALL_REPS and len(model_parts)>=3:
                 model_name = '/'.join((model_parts[-3],model_parts[-1]))
+            degree = folder_degree(path.parent.relative_to(root))
+            if degree is not None:
+                label = f"{label} · N = {degree}"
             title = f"{label} · {model_name.replace('_', ' ')}"
             name = f"training-{len(entries)+1:02d}-{slug(identity)}"
             render_training_history(history, rep, title, assets/name)
@@ -190,28 +216,54 @@ def training_section(roots, assets, output):
             if approximation_path.exists():
                 entry["approximation"] = read(approximation_path)
             entries.append(entry)
-            group_key = '/'.join(part.replace(rep, 'representation') for part in path.parent.resolve().parts)
+            # A descending-weight job nests folders named for its representation, power_series,
+            # so every variant name is neutralised, longest first, to align the three models.
+            group_key = '/'.join(re.sub('|'.join(sorted(ALL_REPS, key=len, reverse=True)), 'representation', part)
+                                 for part in path.parent.resolve().parts)
             group = figures.setdefault(group_key, {"label": f'{model_name.replace("_", " ")} · {identity.rsplit("/", 1)[0]}', "figures": {}})
             group["figures"][rep] = f'<figure><h3>{esc(title)}</h3><p class="facts">{entry["samples"]} logged samples · iterations {entry["first_iteration"]:g}–{entry["last_iteration"]:g}<br>Run: {esc(identity)}</p><a href="{relative}.png"><img loading="lazy" src="{relative}.png" alt="{esc(title)}: total, PDE, initial-condition and supervised losses over iterations"></a><figcaption><a href="{relative}.pdf">PDF</a> · <a href="{relative}.png">PNG</a> · <a href="{relative}.csv">Loss CSV</a></figcaption></figure>'
             if "approximation" in entry:
                 evidence = entry["approximation"]
-                degree = evidence["degree"]
+                degree = evidence.get("degree")  # absent for eigenvalue models, which have no series degree
                 learned = evidence["learned_solution_error"]
                 learned_label = f"{learned:.5g}" if learned is not None and np.isfinite(learned) else "unavailable (nonfinite)"
                 truncation = evidence.get("truncation_error")
-                caption = f'Analytic solution reference · {esc(evidence["evaluation_domain"])} · N={degree} · x ∈ [{evidence["x_left"]}, {evidence["x_right"]}] · {evidence["num_points"]} points. Learned error: {learned_label}.'
+                caption = f'Analytic solution reference · {esc(evidence["evaluation_domain"])}{f" · N={degree}" if degree is not None else ""} · x ∈ [{evidence["x_left"]}, {evidence["x_right"]}] · {evidence["num_points"]} points. Learned error: {learned_label}.'
                 if truncation is not None:
                     caption += f' True-coefficient truncation error: {truncation:.5g}. These errors are not additive.'
                 group["figures"][rep] += f'<p class="facts">{caption}</p>'
     if not entries:
         return '', entries
-    section = '<section id="training-history"><h2>Training histories</h2><p>Each new history separates the optimized objective (total and weighted contributions) from raw diagnostic terms. Legacy histories retain their recorded total and raw terms without guessing weights. Curves use their own model’s scale, with no smoothing.</p><p>The total is weighted; the raw components need not sum to it. Initial-condition loss is a diagnostic outside the shared training objective. Supervision measures coefficient error for power series and solution error for eigenvalue models.</p><p class="facts">Check the run identity before relating a history to an evaluation map. The last logged iteration is not a claim of convergence.</p>'
+    # In a degree sweep the eigenvalue model trained once belongs in every degree's row.
+    borrowed = set()
+    for key, group in figures.items():
+        shared_key = re.sub(r"/degree-\d+(?=/)", "", key)
+        shared = figures.get(shared_key, {}).get("figures", {})
+        if shared_key != key and "eigenvalue" not in group["figures"] and "eigenvalue" in shared:
+            group["figures"]["eigenvalue"] = shared["eigenvalue"]
+            borrowed.add(shared_key)
+    figures = {key: group for key, group in figures.items() if key not in borrowed or set(group["figures"]) != {"eigenvalue"}}
+    section = '<section id="training-history"><h2>Training histories</h2><p>Each new history separates the optimized objective (total and weighted contributions) from raw diagnostic terms. Legacy histories retain their recorded total and raw terms without guessing weights. Curves use their own model’s scale, with no smoothing.</p><p>The total is weighted; the raw components need not sum to it. Histories that show a weighted initial-condition contribution were trained on that term; in earlier histories it is a diagnostic outside the objective. Supervision measures coefficient error for power series and solution error for eigenvalue models.</p><p class="facts">Check the run identity before relating a history to an evaluation map. The last logged iteration is not a claim of convergence.</p>'
     return section+''.join(paired_figure_row(key, group['label'], group['figures']) for key, group in figures.items())+'</section>', entries
 
 
-def pair_panels(left, right):
-    """Match by identity, never by incidental JSON ordering; reject changed designs."""
+def without_degree(meta):
+    """Metadata with the power-series degree, and the fingerprint that folds it in, removed."""
+    reduced = {key: value for key, value in meta.items() if key != "design_sha256"}
+    if isinstance(reduced.get("training_controls"), dict):
+        reduced["training_controls"] = {key: value for key, value in reduced["training_controls"].items() if key != "power_series_degree"}
+    return reduced
+
+
+def pair_panels(left, right, shared_eigenvalue=False):
+    """Match by identity, never by incidental JSON ordering; reject changed designs.
+
+    An eigenvalue model shared across a degree sweep may differ from the power series in
+    degree alone; every other recorded control and every coordinate must still agree.
+    """
     lm, rm = left["meta"], right["meta"]
+    if shared_eigenvalue:
+        lm, rm = without_degree(lm), without_degree(rm)
     if lm.get("representation") != "power_series" or not (rm.get("representation") in ALL_REPS[1:] or (rm.get("representation") == "power_series" and rm.get("coefficient_weighting") == "descending")):
         raise ValueError("Expected power_series on the left and eigenvalue on the right")
     for key in set(lm) | set(rm):
@@ -414,43 +466,53 @@ def build(args):
         for path in sorted(directory.glob("*_power_series.json")):
             other = path.with_name(path.name.replace("_power_series.json", "_eigenvalue.json"))
             if other.exists():
-                pairs.append((path.stem.removesuffix("_power_series"), path, other, False))
+                pairs.append((path.stem.removesuffix("_power_series"), path, other, False, None, False))
     for directory in args.geometry_root:
         for path in sorted(directory.rglob("power_series/panelset.json")):
             other = path.parent.parent / "eigenvalue" / "panelset.json"
             if other.exists():
-                pairs.append((path.parent.parent.name, path, other, True))
+                pairs.append((path.parent.parent.name, path, other, True, None, False))
         # The five diagnostic suites (including both radius modes) use gen-* job directories.
-        for path in sorted(directory.rglob("gen-*-power_series/panelset.json")):
+        # A degree sweep nests them in degree-N folders; its eigenvalue model sits beside the
+        # power series (trained at each degree) or one level up (trained once and shared).
+        found = []
+        for path in directory.rglob("gen-*-power_series/panelset.json"):
             name = path.parent.name.removeprefix("gen-").removesuffix("-power_series")
+            degree = folder_degree(path.parent.parent.name)
             other = path.parent.parent / f"gen-{name}-eigenvalue" / "panelset.json"
+            shared = False
+            if not other.exists() and degree is not None:
+                other = path.parent.parent.parent / f"gen-{name}-eigenvalue" / "panelset.json"
+                shared = True
             if other.exists():
-                pairs.append((name, path, other, read(path)["meta"].get("mode") == "matched_training"))
+                found.append((name, path, other, read(path)["meta"].get("mode") == "matched_training", degree, shared))
+        pairs.extend(sorted(found, key=lambda pair: (pair[1].parent.parent.parent if pair[4] is not None else pair[1].parent.parent, pair[0], pair[4] or 0)))
     manifest = {"date": date, "source_commit": "bb2a102a", "comparisons": [], "geometry_status": {}}
     sections, counts, seen = [], {}, set()
     diagnostics = {}
     consumed_panelsets = set()
-    for number, (name, left_path, right_path, geometry) in enumerate(pairs, 1):
+    for number, (name, left_path, right_path, geometry, degree, shared) in enumerate(pairs, 1):
         identity = (left_path.resolve(), right_path.resolve())
         if identity in seen:
             continue
         seen.add(identity)
         left, right = read(left_path), read(right_path)
-        panels = list(pair_panels(left, right))
+        panels = list(pair_panels(left, right, shared_eigenvalue=shared))
         job_layout = left_path.name == "panelset.json" and left_path.parent.name.startswith("gen-")
         variation_path = (left_path.parent.parent / "power_series_variation" / "panelset.json" if geometry
                           else left_path.with_name(left_path.name.replace("_power_series.json", "_power_series_variation.json")))
         if job_layout:
             variation_path = left_path.parent.parent / f"gen-{name}-power_series_variation" / "panelset.json"
         source_paths = [left_path, right_path]
-        comparison_reps, comparison_labels = REPS, LABELS
+        labels = comparison_labels(degree)
+        comparison_reps, column_labels = REPS, labels[:2]
         if variation_path.exists():
             variation_pairs = list(pair_panels(left, read(variation_path)))
             panels = [(*pair, weighted[1]) for pair, weighted in zip(panels, variation_pairs)]
             source_paths.append(variation_path)
-            comparison_reps, comparison_labels = ALL_REPS, ALL_LABELS
+            comparison_reps, column_labels = ALL_REPS, labels
         consumed_panelsets.update(hashlib.sha256(p.read_bytes()).hexdigest() for p in source_paths)
-        tag = f"{number:02d}-{slug(name)}"
+        tag = f"{number:02d}-{slug(name)}" + (f"-N{degree}" if degree is not None else "")
         meta = left["meta"]
         if geometry and meta.get("mode") == "matched_training" and not meta.get("design_sha256"):
             raise ValueError(f"Missing matched-training design fingerprint: {left_path}")
@@ -458,8 +520,9 @@ def build(args):
         mode = meta.get("mode", "archived results; matching controls not recorded")
         if geometry or job_layout:
             counts.setdefault(experiment, []).append("matched_training" if job_layout else mode)
-        run_group = left_path.parent.parent.parent.name if geometry else left_path.parent.parent.name if job_layout else "Earlier saved experiments"
-        entry = {"name": name, "run_group": run_group, "mode": mode, "metadata": meta, "sources": [], "figures": [], "training_diagnostics": [], "unavailable_figures": []}
+        anchor = left_path.parent.parent if degree is not None else left_path.parent  # skip the degree folder
+        run_group = anchor.parent.parent.name if geometry else anchor.parent.name if job_layout else "Earlier saved experiments"
+        entry = {"name": name, "run_group": run_group, "degree": degree, "shared_eigenvalue": shared, "mode": mode, "metadata": meta, "sources": [], "figures": [], "training_diagnostics": [], "unavailable_figures": []}
         source_links = []
         for rep, path in zip(comparison_reps, source_paths):
             target = assets / f"{tag}-{rep}.json"
@@ -468,7 +531,16 @@ def build(args):
             entry["sources"].append({"path": str(path.resolve()), "sha256": digest})
             source_links.append(f'<a href="{target.relative_to(output).as_posix()}">{rep} data</a>')
         section_title, description = SECTIONS.get(name, (name.replace("_", " ").capitalize(), EXPERIMENTS.get(experiment, "Compare both representations on the same experiment.")))
-        body = [f'<section id="{tag}" data-run-group="{esc(run_group)}"><h2>{esc(section_title)}</h2>', f'<p>{esc(description)}</p>']
+        degree_attribute = ""
+        if degree is not None:
+            section_title = f"{section_title} · N = {degree}"
+            degree_attribute = f' data-degree="{degree}"'
+        body = [f'<section id="{tag}" data-run-group="{esc(run_group)}"{degree_attribute}><h2>{esc(section_title)}</h2>', f'<p>{esc(description)}</p>']
+        if degree is not None:
+            note = f"Power series of degree N = {degree} ({degree+1} coefficients)."
+            if shared:
+                note += " The eigenvalue model has no series degree; one model serves every degree of the sweep."
+            body.append(f'<p class="facts">{esc(note)}</p>')
         if "training_controls" in meta:
             controls = meta["training_controls"]
             body.append(f'<p class="facts">N = {int(controls["power_series_degree"])} · {int(controls["adam_iterations"]):,} Adam iterations · analytic evaluation on [{controls["x_left"]:g}, {controls["x_right"]:g}]</p>')
@@ -480,7 +552,7 @@ def build(args):
         for index, pair in enumerate(panels, 1):
             filename = f"{tag}-{index:02d}-{slug(pair[0]['id'])}"
             if any(is_training_diagnostic(p) for p in pair):
-                for rep, label, panel in zip(comparison_reps, comparison_labels, pair):
+                for rep, label, panel in zip(comparison_reps, column_labels, pair):
                     diagnostic_name = f"{filename}-{rep}-diagnostic"
                     render_pair((panel,), assets / diagnostic_name, labels=(label+" · training diagnostic",))
                     relative = (assets / diagnostic_name).relative_to(output).as_posix()
@@ -490,14 +562,14 @@ def build(args):
                     entry["training_diagnostics"].append({"representation": rep, "figure": relative+".png", "scale": "independent"})
                 continue
             try:
-                render_pair(pair, assets / filename, labels=comparison_labels)
+                render_pair(pair, assets / filename, labels=column_labels)
             except ValueError as error:
                 entry["unavailable_figures"].append({"id": pair[0]["id"], "reason": str(error)})
                 body.append(f'<div class="status"><h3>{esc(pair[0]["title"])}</h3><p>Figure unavailable: {esc(error)}.</p></div>')
                 continue
             relative = (assets / filename).relative_to(output).as_posix()
             title = pair[0]["title"].replace(" (power_series)", "")
-            body.append(f'<figure data-chart-id="{esc(pair[0]["id"])}"><h3>{esc(title)}</h3><a href="{relative}.png"><img loading="lazy" src="{relative}.png" alt="{esc(title)}: {esc(", ".join(comparison_labels))}"></a><figcaption>{esc(caption(pair[0]))} <a href="{relative}.pdf">PDF</a> · <a href="{relative}.png">PNG</a></figcaption></figure>')
+            body.append(f'<figure data-chart-id="{esc(pair[0]["id"])}"><h3>{esc(title)}</h3><a href="{relative}.png"><img loading="lazy" src="{relative}.png" alt="{esc(title)}: {esc(", ".join(column_labels))}"></a><figcaption>{esc(caption(pair[0]))} <a href="{relative}.pdf">PDF</a> · <a href="{relative}.png">PNG</a></figcaption></figure>')
             entry["figures"].append(relative+".png")
         body.append("</section>")
         sections.append((tag, section_title, "".join(body)))

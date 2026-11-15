@@ -50,7 +50,19 @@ dataset=Dict{Any,Any}(reshape(Float32[-1,0,1],3,1)=>ones(Float32,9))
         out=first(net(buf.X,p,st))
         components=rep == :eigenvalue ? LF.batched_eigenvalue_losses(out,buf) : LF.batched_power_series_losses(out,buf;variation=rep==:power_series_variation)
         total,_=P.global_loss_batched(p,settings,net,st,buf)
-        @test total ≈ 5*components[1]+components[3]
+        # Every variant optimises all three terms. Only the power series scales its PDE term
+        # by its coefficient count (N+1 = 5); the eigenvalue objective has no N in it.
+        weights=P.objective_weights(settings)
+        @test weights == (pde=rep == :eigenvalue ? 1f0 : 5f0, ic=1f0, supervised=1f0)
+        @test total ≈ weights.pde*components[1]+components[2]+components[3]
+        @test components[2] > 0
+        for other_degree in (9,30)
+            other=E.settings_for(E.ExperimentConfig(representation=rep,N=other_degree,neuron_count=4,maxiters=2,num_points=5),dataset)
+            @test (P.objective_weights(other).pde == weights.pde) == (rep == :eigenvalue)
+        end
+        without_ic=E.settings_for(E.ExperimentConfig(representation=rep,N=4,neuron_count=4,maxiters=2,num_points=5,
+            loss=P.LossConfig(coefficient_weighting=settings.loss.coefficient_weighting,ic_weight=0)),dataset)
+        @test first(P.global_loss_batched(p,without_ic,net,st,buf)) ≈ weights.pde*components[1]+components[3]
         @test all(isfinite,only(Zygote.gradient(q->first(P.global_loss_batched(q,settings,net,st,buf)),p)))
     end
     for activation in (:sigmoid,:relu,:tanh)
@@ -98,7 +110,19 @@ end
         @test :finished in events
         saved=TOML.parsefile(joinpath(dir,"config.toml"))
         @test saved["objective"]["pde_multiplier"]==5
-        @test occursin("weighted_pde",readline(joinpath(dir,"loss.csv")))
+        @test saved["objective"]["ic_weight"]==1 && saved["objective"]["num_supervised"]==5 && saved["model"]["degree"]==4
+        header=readline(joinpath(dir,"loss.csv"))
+        @test occursin("weighted_pde",header) && occursin("weighted_bc",header)
+        rows=split.(readlines(joinpath(dir,"loss.csv"))[2:end],",")
+        column(name)=parse.(Float64,getindex.(rows,findfirst(==(name),split(header,","))))
+        @test column("total") ≈ column("weighted_pde")+column("weighted_bc")+column("weighted_supervised") rtol=1e-5
+        # An eigenvalue model's saved settings carry no degree, coefficient count or N-scaled weight.
+        eig_settings=E.settings_for(E.ExperimentConfig(representation=:eigenvalue,N=4,neuron_count=4,maxiters=2,num_points=5),dataset)
+        P.train_pinn(eig_settings,joinpath(dir,"eig");run_id="eig")
+        eig_saved=TOML.parsefile(joinpath(dir,"eig","config.toml"))
+        @test eig_saved["objective"]["pde_multiplier"]==1 && eig_saved["objective"]["ic_weight"]==1
+        @test !haskey(eig_saved["model"],"degree") && !haskey(eig_saved["objective"],"num_supervised")
+        @test_throws ErrorException P.LossConfig(ic_weight=-1)
         @test JSON.parsefile(joinpath(dir,"status.json"))["status"] == "completed"
         interrupted=P.train_pinn(settings,joinpath(dir,"interrupt");run_id="interrupt",
             on_event=e->e.kind === :metrics ? throw(InterruptException()) : nothing)

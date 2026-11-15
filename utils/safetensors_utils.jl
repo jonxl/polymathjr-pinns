@@ -307,8 +307,8 @@ function convert_to_safetensors(checkpoint_path::AbstractString, safetensors_pat
 
   extra = Dict{String,Any}(
     "representation" => get(metadata, "representation", "power_series"),
-    "objective_components" => "pde + supervised",
-    "diagnostic_components" => "bc",
+    "objective_components" => "pde + bc + supervised",
+    "diagnostic_components" => "",
   )
   for (k, v) in metadata
     k in ("seed", "architecture", "format", "version") && continue

@@ -133,6 +133,27 @@ end
 end
 
 # ---------------------------------------------------------------------------
+# Test 5b: a degree sweep nests jobs in group folders with unique ids
+# ---------------------------------------------------------------------------
+
+@testset "build_gen_jobs: groups separate degrees of one experiment" begin
+  specs = [GeneralizationSpec(:transfer, :power_series; group="degree-20"),
+           GeneralizationSpec(:transfer, :power_series; group="degree-35"),
+           GeneralizationSpec(:transfer, :eigenvalue)]
+  jobs = build_gen_jobs(specs, "/tmp/x"; n_devices=1)
+  @test [j.output_dir for j in jobs] == ["/tmp/x/degree-20/gen-transfer-power_series",
+                                         "/tmp/x/degree-35/gen-transfer-power_series",
+                                         "/tmp/x/gen-transfer-eigenvalue"]
+  ids = GeneralizationVariants.gen_job_id.(jobs)
+  @test ids == ["degree-20/gen-transfer-power_series", "degree-35/gen-transfer-power_series",
+                "gen-transfer-eigenvalue"]
+  @test_throws ErrorException GeneralizationSpec(:transfer, :power_series; group="../elsewhere")
+  # Two jobs that would share a manifest id are refused instead of overwriting each other.
+  clash = [(output_dir="a/job", device_id=1), (output_dir="b/job", device_id=1)]
+  @test_throws ErrorException GeneralizationVariants.RunManagement.run_jobs(identity, clash)
+end
+
+# ---------------------------------------------------------------------------
 # Test 6: End-to-end — both reps dispatched concurrently
 # ---------------------------------------------------------------------------
 
@@ -144,9 +165,11 @@ end
   ]
   jobs = build_gen_jobs(specs, tmp; n_devices=1)
 
+  # Two lanes on the one device: both experiment jobs train at the same time.
   withenv("JULIA_TUI_OFF" => "1", "CI" => "1") do
-    run_generalization_variants(jobs)
+    run_generalization_variants(jobs; lanes=2)
   end
+  @test_throws ErrorException run_generalization_variants(jobs; lanes=0)
 
   # Both jobs should have produced their own panelset.json
   @test isfile(joinpath(tmp, "gen-showcase-power_series", "panelset.json"))

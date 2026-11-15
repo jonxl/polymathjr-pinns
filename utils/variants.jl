@@ -63,7 +63,8 @@ using Random
 
 export VariantSpec, VariantJob,
        build_jobs, run_staged_variants,
-       device_names, generate_shared_dataset, write_manifest
+       device_names, generate_shared_dataset, write_manifest,
+       staged_specs, required_terms, auto_lanes
 
 # ---------------------------------------------------------------------------
 # VariantSpec — declarative leaf of the variant tree
@@ -95,6 +96,72 @@ function VariantSpec(name::AbstractString, representation::Symbol;
   representation in (:power_series, :eigenvalue, :power_series_variation) || error(
     "VariantSpec: representation must be :power_series, :eigenvalue or :power_series_variation, got :$representation")
   return VariantSpec(String(name), PINN.canonical_representation(representation), N, neuron_count, maxiters, seed_offset,model,loss)
+end
+
+# ---------------------------------------------------------------------------
+# Staged grid — which variants one staged run trains
+# ---------------------------------------------------------------------------
+
+# The loss evaluates 1/n! from a fixed table, so the degree cannot exceed it.
+const MAX_DEGREE = length(PINN.loss_functions.INV_FACT) - 1
+
+"""
+    staged_specs(; representations, degrees, weightings, neuron_count, maxiters) → Vector{VariantSpec}
+
+The staged grid. Power series contributes one variant per (degree, weighting)
+pair; eigenvalue contributes exactly one, because its network does not depend
+on the degree and it has no coefficient weighting.
+
+Both weightings of one degree share a seed, so they differ only in the loss.
+Uniform variants keep the existing `ps_N<degree>` name; others are
+`ps_<weighting>_N<degree>`.
+"""
+function staged_specs(; representations=(:power_series, :eigenvalue),
+                      degrees=(20, 25, 30, 35),
+                      weightings=(:uniform, :descending),
+                      neuron_count::Int=64, maxiters::Int=3000)
+  specs = VariantSpec[]
+  if :power_series in representations
+    isempty(degrees) && error("staged_specs: power series needs at least one degree")
+    isempty(weightings) && error("staged_specs: power series needs at least one weighting")
+    allunique(degrees) || error("staged_specs: degrees must be distinct, got $(collect(degrees))")
+    allunique(weightings) || error("staged_specs: weightings must be distinct, got $(collect(weightings))")
+    for N in degrees
+      1 <= N <= MAX_DEGREE || error("staged_specs: degree must be in 1:$MAX_DEGREE, got $N")
+      for weighting in weightings
+        name = weighting === :uniform ? string("ps_N", N) : string("ps_", weighting, "_N", N)
+        push!(specs, VariantSpec(name, :power_series;
+          N=N, neuron_count=neuron_count, maxiters=maxiters, seed_offset=N,
+          loss=PINN.LossConfig(coefficient_weighting=weighting)))
+      end
+    end
+  end
+  if :eigenvalue in representations
+    push!(specs, VariantSpec("eig", :eigenvalue;
+      N=20, neuron_count=neuron_count, maxiters=maxiters, seed_offset=9999))
+  end
+  isempty(specs) && error("staged_specs: no variants selected from $(collect(representations))")
+  return specs
+end
+
+"""
+    required_terms(specs) → Int
+
+The `num_terms` to generate the shared dataset with: the largest degree in the
+grid. Each ODE then carries every coefficient any variant supervises, and a
+lower-degree variant reads a prefix of the same row.
+"""
+required_terms(specs) = maximum(s.N for s in specs)
+
+"""
+    auto_lanes(n_jobs, n_devices) → Int
+
+How many jobs to run at once per device when the caller does not say. On a GPU,
+one per Julia thread, capped at the jobs a device will receive. On CPU, one.
+"""
+function auto_lanes(n_jobs::Integer, n_devices::Integer=length(device_names()))
+  CUDA.functional() || return 1
+  return max(1, min(Threads.nthreads(), cld(n_jobs, n_devices)))
 end
 
 # ---------------------------------------------------------------------------
@@ -183,6 +250,15 @@ function build_jobs(specs::AbstractVector{VariantSpec}, dataset::Dict,
   if n_devices <= 0
     n_devices = length(device_names())
   end
+  # Missing targets would be zero-padded and still supervised, silently
+  # training the high-order coefficients toward zero. Refuse instead.
+  available = minimum(length, values(dataset); init=typemax(Int))
+  for spec in specs
+    spec.representation === :power_series || continue
+    spec.N + 1 <= available || error(
+      "build_jobs: variant $(spec.name) supervises $(spec.N + 1) coefficients but the dataset " *
+      "carries only $available per ODE; generate it with num_terms=$(required_terms(specs))")
+  end
   jobs = VariantJob[]
   for (i, spec) in enumerate(specs)
     dev = ((i - 1) % n_devices) + 1      # 1-indexed into device_names()
@@ -208,26 +284,41 @@ Spawn one worker task per job. Each worker:
    slot's iter + loss.
 4. Saves a checkpoint under `job.output_dir/model.checkpoint`.
 
-The board is created once with one row per visible device; updates are
-serialized by the board's lock. The function blocks until all jobs finish.
+`lanes` is how many jobs train at once on each device (default 1). The board is
+created once with one row per device lane; updates are serialized by the
+board's lock. The function blocks until all jobs finish.
 """
 function run_staged_variants(jobs::AbstractVector{VariantJob};
-                             benchmark_dataset::Union{Dict,Nothing}=nothing, run=nothing)
+                             benchmark_dataset::Union{Dict,Nothing}=nothing, run=nothing,
+                             lanes::Int=1)
+  lanes >= 1 || error("run_staged_variants: lanes must be at least 1, got $lanes")
   devs = device_names()
   max_iter = isempty(jobs) ? 10000 : jobs[1].spec.maxiters
-  board = TUI.GPUBoard(devs; max_iter=max_iter)
+  rows = lanes == 1 ? devs : [string(dev, " #", lane) for dev in devs for lane in 1:lanes]
+  board = TUI.GPUBoard(rows; max_iter=max_iter)
 
-  return RunManagement.run_jobs(jobs; run=run, devices=length(devs)) do job
+  # Each running job borrows one board row of its device and returns it when done.
+  free_lanes = [Channel{Int}(lanes) for _ in devs]
+  for pool in free_lanes, lane in 1:lanes
+    put!(pool, lane)
+  end
+
+  return RunManagement.run_jobs(jobs; run=run, devices=length(devs), lanes=lanes) do job
     CUDA.functional() && CUDA.device!(job.device_id-1)
-    _run_one_job!(board,job,benchmark_dataset)
+    lane = take!(free_lanes[job.device_id])
+    try
+      _run_one_job!(board, job, benchmark_dataset; slot=(job.device_id - 1) * lanes + lane)
+    finally
+      put!(free_lanes[job.device_id], lane)
+    end
   end
 end
 
 # Worker body — kept private; called inside a task spawned by run_staged_variants.
 function _run_one_job!(board::TUI.GPUBoard, job::VariantJob,
-                       benchmark_dataset::Union{Dict,Nothing})
+                       benchmark_dataset::Union{Dict,Nothing};
+                       slot::Int=job.device_id)
   mkpath(job.output_dir)
-  slot = job.device_id      # GPUBoard rows are indexed by device, not by job
   TUI.update!(board, slot;
               variant=job.tag,
               max_iter=job.spec.maxiters,
@@ -260,8 +351,8 @@ function _run_one_job!(board::TUI.GPUBoard, job::VariantJob,
     p_trained, coeff_net, settings.seed;
     representation=settings.representation,
     extra_metadata=Dict{String,Any}(
-      "objective_components" => "pde + supervised",
-      "diagnostic_components" => "bc",
+      "objective_components" => "pde + bc + supervised",
+      "diagnostic_components" => "",
       "variant_name" => job.tag,
       "coefficient_weighting" => String(settings.loss.coefficient_weighting),
     )

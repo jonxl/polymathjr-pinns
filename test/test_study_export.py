@@ -44,6 +44,22 @@ class StudyExportTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "do not match total"):
                 exporter.load_training_history(path)
 
+    def test_initial_condition_contribution_joins_the_objective_when_recorded(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory)/"loss.csv"
+            header = "iteration,total,bc,pde,supervised,weighted_pde,weighted_bc,weighted_supervised\n"
+            path.write_text(header + "1,30,7,1,2,21,7,2\n2,15.5,3,0.5,2,10.5,3,2\n")
+            history = exporter.load_training_history(path)
+            with patch.object(exporter.plt, "close"):
+                exporter.render_training_history(history, "eigenvalue", "Example", Path(directory)/"history")
+                fig = exporter.plt.gcf()
+                self.assertIn("Weighted initial-condition contribution", fig.axes[0].get_legend_handles_labels()[1])
+                self.assertIn("Initial conditions (raw)", fig.axes[1].get_legend_handles_labels()[1])
+            exporter.plt.close("all")
+            path.write_text(header + "1,23,7,1,2,21,7,2\n")  # total omits the recorded initial-condition contribution
+            with self.assertRaisesRegex(ValueError, "do not match total"):
+                exporter.load_training_history(path)
+
     def test_canonical_power_series_can_have_distinct_loss(self):
         left, _ = sets()
         right = copy.deepcopy(left)
@@ -158,6 +174,66 @@ class StudyExportTests(unittest.TestCase):
             self.assertEqual(len(manifest["training_histories"]), 3)
             self.assertEqual(manifest["geometry_status"]["transfer"], "Matched results available")
             self.assertEqual(target.read_text().count('data-chart-group='), 1)
+
+    def write_sweep(self, root, shared, eigenvalue_controls=None):
+        """Two degrees of one geometry-style experiment, as the launcher lays a sweep out."""
+        import json
+        def job(folder, rep, degree, controls=None):
+            path = root / folder / f"gen-transfer-{rep}"
+            path.mkdir(parents=True)
+            meta = {"representation": "power_series" if rep == "power_series_variation" else rep,
+                    "coefficient_weighting": "descending" if rep == "power_series_variation" else "uniform",
+                    "shape": "transfer", "design_sha256": f"hash-{degree}",
+                    "training_controls": {"power_series_degree": degree, "adam_iterations": 10, "x_left": 0.0, "x_right": 1.0, **(controls or {})}}
+            (path / "panelset.json").write_text(json.dumps({"meta": meta, "panels": [panel("first")]}))
+            model = path / f"exp-transfer_{rep}-{rep}-train_saddle"
+            model.mkdir()
+            (model / "loss.csv").write_text("iteration,total,bc,pde,supervised\n1,5,1,2,3\n2,4,1,1,3\n")
+        for degree in (20, 35):
+            job(f"degree-{degree}", "power_series", degree)
+            job(f"degree-{degree}", "power_series_variation", degree)
+            if not shared:
+                job(f"degree-{degree}", "eigenvalue", degree)
+        if shared:
+            job("", "eigenvalue", 20, eigenvalue_controls)
+        return exporter.build(SimpleNamespace(date="2026-11-13", output=root / "web", panel_data=[],
+                                              geometry_root=[root], training_root=[]))
+
+    def test_degree_sweep_shares_one_eigenvalue_model_and_labels_each_degree(self):
+        with tempfile.TemporaryDirectory() as directory:
+            target, manifest = self.write_sweep(Path(directory), shared=True)
+            page = target.read_text()
+            self.assertEqual([(c["degree"], c["shared_eigenvalue"], len(c["sources"])) for c in manifest["comparisons"]],
+                             [(20, True, 3), (35, True, 3)])
+            self.assertEqual(manifest["standalone_results"], [])
+            self.assertEqual({c["run_group"] for c in manifest["comparisons"]}, {Path(directory).name})  # both degrees belong to one run
+            for degree in (20, 35):
+                self.assertIn(f'data-degree="{degree}"', page)
+                self.assertIn(f"<h2>Transfer · N = {degree}</h2>", page)
+                self.assertIn(f"Power series · N = {degree} (descending coefficient weights)", page)
+            # The shared model keeps the multiplier of the degree it was trained at.
+            self.assertNotIn("PDE multiplier", page)  # the eigenvalue model has no degree to report
+            self.assertEqual(page.count("(uniform coefficient weights), Eigenvalue, Power series · N = "), 2)
+            self.assertIn("Power series (uniform coefficient weights) · N = 35", page)  # training history title
+            # Each degree's history row shows the shared eigenvalue model; no row is left without one.
+            self.assertEqual(page.count('class="figure-pair"'), 2)
+            self.assertNotIn("No saved result", page)
+
+    def test_degree_sweep_with_eigenvalue_at_each_degree_stays_strictly_matched(self):
+        with tempfile.TemporaryDirectory() as directory:
+            target, manifest = self.write_sweep(Path(directory), shared=False)
+            self.assertEqual([(c["degree"], c["shared_eigenvalue"]) for c in manifest["comparisons"]], [(20, False), (35, False)])
+            self.assertIn("Power series · N = 35 (uniform coefficient weights), Eigenvalue, ", target.read_text())
+
+    def test_shared_eigenvalue_may_differ_in_degree_only(self):
+        with tempfile.TemporaryDirectory() as directory:
+            with self.assertRaisesRegex(ValueError, "metadata"):
+                self.write_sweep(Path(directory), shared=True, eigenvalue_controls={"adam_iterations": 11})
+        left, right = sets()
+        right["meta"]["design_sha256"] = "different"
+        with self.assertRaisesRegex(ValueError, "metadata"):  # unchanged for ordinary pairs
+            list(exporter.pair_panels(left, right))
+        self.assertEqual(len(list(exporter.pair_panels(left, right, shared_eigenvalue=True))), 2)
 
     def test_history_preserves_actual_iterations_and_failed_values(self):
         with tempfile.TemporaryDirectory() as directory:

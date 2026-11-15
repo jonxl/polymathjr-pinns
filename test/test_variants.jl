@@ -109,7 +109,7 @@ end
 
 @testset "write_manifest: valid JSON with jobs + dataset meta" begin
   tmp = mktempdir()
-  dataset = generate_shared_dataset(n_per_region=10, num_terms=10, seed=1)
+  dataset = generate_shared_dataset(n_per_region=10, num_terms=20, seed=1)
   specs = [VariantSpec("ps_N20", :power_series; N=20),
            VariantSpec("eig", :eigenvalue)]
   jobs = build_jobs(specs, dataset, tmp; n_devices=2)
@@ -155,6 +155,98 @@ end
   chain, p_ca, st, meta = Variants.PINN.SafeTensorSnapshots.load_any_model(joinpath(job_dir, "model.checkpoint"))
   @test meta["representation"] == "power_series"
   @test meta["variant_name"] == "tiny"
+end
+
+# ---------------------------------------------------------------------------
+# Test 7: staged grid — degrees × weightings, eigenvalue once
+# ---------------------------------------------------------------------------
+
+@testset "staged_specs: grid, names, shared seeds" begin
+  specs = staged_specs(degrees=(20, 35), weightings=(:uniform, :descending))
+  @test [s.name for s in specs] ==
+        ["ps_N20", "ps_descending_N20", "ps_N35", "ps_descending_N35", "eig"]
+  @test [s.loss.coefficient_weighting for s in specs] ==
+        [:uniform, :descending, :uniform, :descending, :uniform]
+  # Both weightings of one degree share the seed; they differ only in the loss.
+  @test specs[1].seed_offset == specs[2].seed_offset
+  @test specs[3].seed_offset == specs[4].seed_offset
+  @test required_terms(specs) == 35
+
+  # Eigenvalue contributes one variant however many degrees are staged.
+  @test count(s -> s.representation === :eigenvalue,
+              staged_specs(degrees=(5, 10, 15, 20))) == 1
+  @test length(staged_specs(representations=(:eigenvalue,))) == 1
+
+  @test_throws ErrorException staged_specs(degrees=(20, 20))
+  @test_throws ErrorException staged_specs(degrees=(Variants.MAX_DEGREE + 1,))
+  @test_throws ErrorException staged_specs(weightings=(:unknown,))
+  @test_throws ErrorException staged_specs(representations=(:other,))
+end
+
+# ---------------------------------------------------------------------------
+# Test 8: a dataset too short for a variant's degree is refused
+# ---------------------------------------------------------------------------
+
+@testset "build_jobs: refuses targets shorter than the degree" begin
+  specs = staged_specs(degrees=(5, 8), neuron_count=4, maxiters=2)
+  short = generate_shared_dataset(n_per_region=2, num_terms=5, seed=3)
+  @test_throws ErrorException build_jobs(specs, short, "results/test"; n_devices=1)
+
+  full = generate_shared_dataset(n_per_region=2, num_terms=required_terms(specs), seed=3)
+  @test all(v -> length(v) == required_terms(specs) + 1, values(full))
+  @test length(build_jobs(specs, full, "results/test"; n_devices=1)) == length(specs)
+
+  # A lower degree reads a prefix of the same rows: same ODEs, same leading values.
+  for (alpha, series) in short
+    @test full[alpha][1:length(series)] == series
+  end
+end
+
+# ---------------------------------------------------------------------------
+# Test 9: run_jobs honours the per-device lane count
+# ---------------------------------------------------------------------------
+
+@testset "run_jobs: lanes bound concurrency per device" begin
+  jobs = [(output_dir="job$i", device_id=1) for i in 1:6]
+  for lanes in (1, 3)
+    running = Threads.Atomic{Int}(0)
+    peak = Threads.Atomic{Int}(0)
+    Variants.RunManagement.run_jobs(jobs; devices=1, lanes=lanes) do job
+      Threads.atomic_max!(peak, Threads.atomic_add!(running, 1) + 1)
+      sleep(0.2)
+      Threads.atomic_sub!(running, 1)
+    end
+    @test peak[] == lanes
+  end
+  @test_throws ErrorException Variants.RunManagement.run_jobs(identity, jobs; lanes=0)
+end
+
+# ---------------------------------------------------------------------------
+# Test 10: End-to-end — a uniform/descending pair trains on two lanes
+# ---------------------------------------------------------------------------
+
+@testset "staged runner: two lanes, both weightings" begin
+  tmp = mktempdir()
+  specs = staged_specs(representations=(:power_series,), degrees=(5,),
+                       neuron_count=4, maxiters=20)
+  dataset = generate_shared_dataset(n_per_region=5, num_terms=required_terms(specs), seed=7)
+  jobs = build_jobs(specs, dataset, tmp; n_devices=1)
+
+  withenv("JULIA_TUI_OFF" => "1", "CI" => "1") do
+    run_staged_variants(jobs; lanes=2)
+  end
+
+  weightings = String[]
+  for job in jobs
+    path = joinpath(job.output_dir, "model.checkpoint")
+    @test isfile(path)
+    @test isfile(joinpath(job.output_dir, "loss.csv"))
+    _, _, _, meta = Variants.PINN.SafeTensorSnapshots.load_any_model(path)
+    @test meta["variant_name"] == job.tag
+    push!(weightings, meta["coefficient_weighting"])
+  end
+  @test weightings == ["uniform", "descending"]
+  @test_throws ErrorException run_staged_variants(jobs; lanes=0)
 end
 
 @info "============================================"

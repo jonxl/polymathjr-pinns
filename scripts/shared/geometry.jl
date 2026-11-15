@@ -18,7 +18,7 @@ function usage()
     histories, checkpoints and viewer panelset.json. Once both heads finish,
     comparison.json pairs their charts with common heatmap scales. controls.json
     records the shared equations and controls; mismatched runs are rejected.
-    Training uses the dual branch's PDE + supervision objective; IC is diagnostic.
+    Training uses the dual branch's PDE + initial-condition + supervision objective.
     This differs from the legacy scripts' Adam/LBFGS training-to-floor protocol.
 
     Frozen mode loads the 14 validation-selected checkpoints without retraining.

@@ -82,6 +82,8 @@ Fields:
 - `Ng::Int`                 — grid size for gen_radius
 - `n_per_region::Int`       — ODEs per region (forwarded to ExperimentConfig)
 - `maxiters::Int`           — Adam iterations per PINN (forwarded to ExperimentConfig)
+- `group::String`           — optional folder that sets this job apart from another with the
+                              same experiment and variant, e.g. `"degree-25"` in a degree sweep
 
 Unused fields default silently — `:showcase` ignores `regions`/`Rmax`/`Ng`
 entirely, while `:transfer` ignores `Rmax`/`Ng`.
@@ -97,12 +99,14 @@ struct GeneralizationSpec
   n_per_region::Int
   maxiters::Int
   config::Union{Nothing,Dict{String,Any}}
+  group::String
 end
 
 function GeneralizationSpec(name::Symbol, representation::Symbol;
                             regions::Vector{Symbol}=REGIONS,
                             Rmax::Int=6, Ng::Union{Int,Nothing}=nothing,
-                            n_per_region::Union{Int,Nothing}=nothing, maxiters::Int=3000, config=nothing)
+                            n_per_region::Union{Int,Nothing}=nothing, maxiters::Int=3000, config=nothing,
+                            group::AbstractString="")
   name in ALL_EXPERIMENTS || error(
     "GeneralizationSpec: unknown experiment :$name; expected one of " *
     ":transfer, :extrapolate, :range, :showcase, :gen_radius, $(GEOMETRY_EXPERIMENTS)")
@@ -112,8 +116,9 @@ function GeneralizationSpec(name::Symbol, representation::Symbol;
   Ng=something(Ng,controls.ng); n_per_region=something(n_per_region,controls.n)
   Ng >= 2 && n_per_region > 0 && maxiters > 0 || error("Invalid grid size, dataset size, or iteration limit")
   name === :showcase && n_per_region < 3 && error("showcase requires at least three examples (one per training region)")
+  occursin(r"^[A-Za-z0-9_-]*$", group) || error("GeneralizationSpec: group must be a plain folder name, got \"$group\"")
   return GeneralizationSpec(name, Experiments.PINN.canonical_representation(representation), representation, Experiments.PINN.coefficient_weighting(representation), copy(regions), Rmax, Ng,
-                            n_per_region, maxiters, config)
+                            n_per_region, maxiters, config, String(group))
 end
 
 # ---------------------------------------------------------------------------
@@ -181,11 +186,15 @@ function build_gen_jobs(specs::AbstractVector{GeneralizationSpec},
     dev = ((i - 1) % n_devices) + 1
     # Use string concat (not joinpath) so "-" stays a separator, not a literal
     # directory name. joinpath("/tmp", "x", "-", "y") → "/tmp/x/-/y".
-    dir = joinpath(output_root, "gen-" * String(spec.name) * "-" * String(spec.variant))
+    dir = joinpath(output_root, spec.group, "gen-" * String(spec.name) * "-" * String(spec.variant))
     push!(jobs, GenJob(spec, dev, dir))
   end
   return jobs
 end
+
+"Manifest id of a job: its folder name, prefixed by the spec's group when it has one."
+gen_job_id(job::GenJob) = isempty(job.spec.group) ? basename(job.output_dir) :
+                          string(job.spec.group, "/", basename(job.output_dir))
 
 # Local helper to avoid pulling Variants into this module's namespace.
 function Variants_device_count()
@@ -212,10 +221,12 @@ Spawn one worker task per job. Each worker:
 4. Saves the resulting PanelSet to `job.output_dir/panelset.json`.
 5. Updates the GPUBoard slot for its device.
 
-The board is created once with one row per visible device; updates are
-serialized by the board's lock. The function blocks until all jobs finish.
+`lanes` is how many jobs run at once on each device (default 1). The board is
+created once with one row per device lane; updates are serialized by the
+board's lock. The function blocks until all jobs finish.
 """
-function run_generalization_variants(jobs::AbstractVector{GenJob}; run=nothing)
+function run_generalization_variants(jobs::AbstractVector{GenJob}; run=nothing, lanes::Int=1)
+  lanes >= 1 || error("run_generalization_variants: lanes must be at least 1, got $lanes")
   devs = String[]
   if CUDA.functional()
     n = CUDA.ndevices()
@@ -224,11 +235,23 @@ function run_generalization_variants(jobs::AbstractVector{GenJob}; run=nothing)
     push!(devs, "CPU")
   end
 
-  board = TUI.GPUBoard(devs)
+  rows = lanes == 1 ? devs : [string(dev, " #", lane) for dev in devs for lane in 1:lanes]
+  board = TUI.GPUBoard(rows)
 
-  return RunManagement.run_jobs(jobs; run=run, devices=length(devs)) do job
+  # Each running job borrows one board row of its device and returns it when done.
+  free_lanes = [Channel{Int}(lanes) for _ in devs]
+  for pool in free_lanes, lane in 1:lanes
+    put!(pool, lane)
+  end
+
+  return RunManagement.run_jobs(jobs; run=run, devices=length(devs), lanes=lanes, id=gen_job_id) do job
     CUDA.functional() && CUDA.device!(job.device_id-1)
-    _run_one_gen_job!(board,job)
+    lane = take!(free_lanes[job.device_id])
+    try
+      _run_one_gen_job!(board, job; slot=(job.device_id - 1) * lanes + lane)
+    finally
+      put!(free_lanes[job.device_id], lane)
+    end
   end
 end
 
@@ -238,19 +261,20 @@ function config_keywords(spec)
   P=Experiments.PINN
   return (representation=Symbol(m["representation"]), N=Int(m["degree"]), neuron_count=Int(first(m["hidden_widths"])),
     model=P.ModelConfig(hidden_widths=m["hidden_widths"],activation=Symbol(m["activation"])),
-    loss=P.LossConfig(coefficient_weighting=Symbol(o["coefficient_weighting"])),
+    loss=P.LossConfig(coefficient_weighting=Symbol(o["coefficient_weighting"]), ic_weight=o["ic_weight"]),
     supervised_weight=Float32(o["supervised_weight"]),pde_weight=Float32(o["pde_weight"]),
     seed=Int(m["seed"]),data_seed=Int(d["seed"]),num_points=Int(d["num_points"]),x_left=Float32(d["x_left"]),x_right=Float32(d["x_right"]),
     n_per_region=spec.n_per_region,maxiters=spec.maxiters,batch_size=Int(t["batch_size"]),
     checkpoint_interval=Int(t["checkpoint_epochs"]),metrics_interval=Int(t["metrics_interval"]),input_encoding=Symbol(m["input_encoding"]))
 end
 
-function _run_one_gen_job!(board::TUI.GPUBoard, job::GenJob)
+function _run_one_gen_job!(board::TUI.GPUBoard, job::GenJob; slot::Int=job.device_id)
   mkpath(job.output_dir)
   kwargs = config_keywords(job.spec)
   cfg = Experiments.ExperimentConfig(; kwargs...)
   tag = string(job.spec.name, "_", job.spec.variant)
-  TUI.update!(board, job.device_id; variant=tag)
+  label = isempty(job.spec.group) ? tag : string(tag, " [", job.spec.group, "]")
+  TUI.update!(board, slot; variant=label)
 
   if job.spec.name in GEOMETRY_EXPERIMENTS
     geometry_cfg = cfg
@@ -259,7 +283,7 @@ function _run_one_gen_job!(board::TUI.GPUBoard, job::GenJob)
       output_root=geometry_root, ng=job.spec.Ng)
     cp(joinpath(geometry_root, String(job.spec.name), String(cfg.representation), "panelset.json"),
        joinpath(job.output_dir, "panelset.json"); force=true)
-    TUI.update!(board, job.device_id; variant=string(tag, " ✓"))
+    TUI.update!(board, slot; variant=string(label, " ✓"))
     return result
   end
 
@@ -288,7 +312,7 @@ function _run_one_gen_job!(board::TUI.GPUBoard, job::GenJob)
   out_path = joinpath(job.output_dir, "panelset.json")
   Experiments.save_experiment(out_path, ps)
 
-  TUI.update!(board, job.device_id; variant=string(tag, " ✓"))
+  TUI.update!(board, slot; variant=string(label, " ✓"))
   return ps
 end
 

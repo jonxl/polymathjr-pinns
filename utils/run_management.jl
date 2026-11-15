@@ -79,25 +79,33 @@ function finish_run!(run)
     end
     return run.manifest["status"]
 end
-"Run independent jobs to completion; report aggregate failure only after all workers finish."
-function run_jobs(worker, jobs; run=nothing, devices=1)
-    locks=[ReentrantLock() for _ in 1:devices]
+"""
+Run independent jobs to completion; report aggregate failure only after all workers finish.
+
+At most `lanes` jobs run at once on each device (default 1). The rest wait for a free lane.
+`id` names a job in the run manifest; it defaults to the job's output folder name and must be
+unique within the run.
+"""
+function run_jobs(worker, jobs; run=nothing, devices=1, lanes=1, id=job->basename(job.output_dir))
+    lanes >= 1 || error("lanes must be at least 1, got $lanes")
+    allunique(id(job) for job in jobs) || error("Job ids must be unique within a run")
+    slots=[Base.Semaphore(lanes) for _ in 1:devices]
     outcomes=fill(:pending,length(jobs))
     for job in jobs
-        run === nothing || job_status!(run,basename(job.output_dir),:pending)
+        run === nothing || job_status!(run,id(job),:pending)
     end
     tasks=map(collect(enumerate(jobs))) do (i,job)
-        Threads.@spawn lock(locks[job.device_id]) do
-            id=basename(job.output_dir)
-            run === nothing || job_status!(run,id,:running)
+        Threads.@spawn Base.acquire(slots[job.device_id]) do
+            name=id(job)
+            run === nothing || job_status!(run,name,:running)
             try
                 worker(job)
                 outcomes[i]=:completed
-                run === nothing || job_status!(run,id,:completed)
+                run === nothing || job_status!(run,name,:completed)
             catch e
                 outcomes[i]=e isa InterruptException ? :interrupted : :failed
-                @error "Job failed" job=id exception=(e,catch_backtrace())
-                run === nothing || job_status!(run,id,outcomes[i];error=sprint(showerror,e))
+                @error "Job failed" job=name exception=(e,catch_backtrace())
+                run === nothing || job_status!(run,name,outcomes[i];error=sprint(showerror,e))
             end
         end
     end

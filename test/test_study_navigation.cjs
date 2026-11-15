@@ -34,7 +34,7 @@ const sections = [
 const buttons = ['overview', 'generalization', 'training', 'diagnostics'].map(view => {
   const button = new Element(); button.dataset.studyView = view; return button;
 });
-const controls = Object.fromEntries(['run-field', 'run-select', 'chart-type-select', 'region-select', 'study-controls', 'experiment-select', 'chart-select', 'show-all', 'figure-status', 'previous-chart', 'next-chart', 'chart-controls', 'chart-label', 'experiment-field', 'comparison-key', 'fallback-navigation'].map(id => [id, new Element()]));
+const controls = Object.fromEntries(['run-field', 'run-select', 'degree-field', 'degree-select', 'chart-type-select', 'region-select', 'study-controls', 'experiment-select', 'chart-select', 'show-all', 'figure-status', 'previous-chart', 'next-chart', 'chart-controls', 'chart-label', 'experiment-field', 'comparison-key', 'fallback-navigation'].map(id => [id, new Element()]));
 const events = {};
 const location = {hash: ''};
 const context = {
@@ -88,5 +88,25 @@ controls['run-select'].fire('change');
 assert.equal(controls['run-select'].value, 'dual-representation-exp-1');
 assert.equal(controls['experiment-select'].children.length, 1);
 assert.equal(sections[1].hidden, false);
+
+// A degree sweep: the selector appears only with two or more degrees and filters sections.
+controls['run-select'].value = ''; controls['run-select'].fire('change');
+assert.equal(controls['degree-field'].hidden, true);
+sections[1].dataset.degree = '20';
+sections[2].dataset.degree = '35';
+buttons.find(b => b.dataset.studyView === 'generalization').fire('click');
+assert.equal(controls['degree-field'].hidden, false);
+assert.deepEqual(controls['degree-select'].children.map(o => o.textContent), ['All degrees', 'N = 20', 'N = 35']);
+assert.equal(controls['experiment-select'].children.length, 2);
+controls['degree-select'].value = '35'; controls['degree-select'].fire('change');
+assert.equal(controls['experiment-select'].children.length, 1);
+assert.equal(sections[2].hidden, false);
+assert.equal(sections[1].hidden, true);
+// A link to a section at another degree clears the filter instead of hiding the target.
+location.hash = '#03-shared_genradius_family'; events.hashchange();
+assert.equal(sections[1].hidden, false);
+assert.equal(controls['degree-select'].value, '');
+buttons.find(b => b.dataset.studyView === 'training').fire('click');
+assert.equal(controls['degree-field'].hidden, true);
 
 });

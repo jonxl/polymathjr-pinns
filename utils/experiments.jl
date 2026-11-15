@@ -198,9 +198,9 @@ function train_one(cfg::ExperimentConfig, dataset::Dict, tag::String;
     PINN.SafeTensorSnapshots.save_checkpoint(path, p_current, coeff_net, settings.seed;
       representation=cfg.representation, iteration=iteration,
       extra_metadata=Dict{String,Any}(
-        "objective_components" => "pde + supervised",
+        "objective_components" => "pde + bc + supervised",
         "coefficient_weighting" => String(settings.loss.coefficient_weighting),
-        "diagnostic_components" => "bc",
+        "diagnostic_components" => "",
         "experiment_tag" => tag,
         "input_encoding" => String(settings.input_encoding),
       ))
@@ -224,15 +224,15 @@ function train_one(cfg::ExperimentConfig, dataset::Dict, tag::String;
   PINN.SafeTensorSnapshots.save_checkpoint(joinpath(dir, "model.checkpoint"), p, net, settings.seed;
     representation=cfg.representation,
     extra_metadata=Dict{String,Any}(
-      "objective_components" => "pde + supervised",
+      "objective_components" => "pde + bc + supervised",
         "coefficient_weighting" => String(settings.loss.coefficient_weighting),
-      "diagnostic_components" => "bc",
+      "diagnostic_components" => "",
       "input_encoding" => String(settings.input_encoding),
     ))
   accuracy = evaluate_on(p, net, st, settings, dataset)
   open(joinpath(dir,"approximation.json"),"w") do io
     PINN.JSON.print(io,Dict("reference"=>"analytic_solution", "evaluation_domain"=>"training equations",
-      "degree"=>settings.n_terms_for_power_series,"representation"=>String(settings.representation),
+      "degree"=>settings.representation === :eigenvalue ? nothing : settings.n_terms_for_power_series,"representation"=>String(settings.representation),
       "coefficient_weighting"=>String(settings.loss.coefficient_weighting),
       "learned_solution_error"=>accuracy.relerr,"truncation_error"=>accuracy.truncation_error,
       "x_left"=>settings.x_left,"x_right"=>settings.x_right,"num_points"=>settings.num_points),2)

@@ -19,15 +19,23 @@ function Base.iterate(r::TrainingResult, i=1)
 end
 Base.length(::TrainingResult)=5
 
-function write_resolved_settings(dir, s; batch_size, metrics_interval, checkpoint_epochs)
+"`weights` are the objective's resolved (pde, ic, supervised) weights, as the training loop applies them."
+function write_resolved_settings(dir, s; weights, batch_size, metrics_interval, checkpoint_epochs)
     mkpath(dir)
+    model=Dict{String,Any}("seed"=>s.seed,"representation"=>String(s.representation), "hidden_widths"=>s.model.hidden_widths,
+        "activation"=>String(s.model.activation), "input_encoding"=>String(s.input_encoding))
+    objective=Dict{String,Any}("coefficient_weighting"=>String(s.loss.coefficient_weighting),
+        "pde_weight"=>s.pde_weight, "ic_weight"=>weights.ic, "supervised_weight"=>s.supervised_weight,
+        "pde_multiplier"=>weights.pde,
+        "formula"=>"pde_multiplier * pde + ic_weight * bc + supervised_weight * supervised", "diagnostic_terms"=>String[])
+    # Degree and coefficient count describe a power series; an eigenvalue model has neither.
+    if s.representation !== :eigenvalue
+        model["degree"]=s.n_terms_for_power_series
+        objective["num_supervised"]=s.num_supervised
+    end
     cfg=Dict(
-      "model"=>Dict("seed"=>s.seed,"representation"=>String(s.representation), "hidden_widths"=>s.model.hidden_widths,
-        "activation"=>String(s.model.activation), "degree"=>s.n_terms_for_power_series, "input_encoding"=>String(s.input_encoding)),
-      "objective"=>Dict("coefficient_weighting"=>String(s.loss.coefficient_weighting),
-        "pde_weight"=>s.pde_weight, "supervised_weight"=>s.supervised_weight,
-        "pde_multiplier"=>s.pde_weight*s.num_supervised, "num_supervised"=>s.num_supervised,
-        "formula"=>"pde_multiplier * pde + supervised_weight * supervised", "diagnostic_terms"=>["bc"]),
+      "model"=>model,
+      "objective"=>objective,
       "data"=>Dict("dataset_size"=>length(s.ode_matrices),"num_points"=>s.num_points,"x_left"=>s.x_left,"x_right"=>s.x_right),
       "training"=>Dict("optimizer"=>"adam","learning_rate"=>0.001,"maxiters"=>s.maxiters_lbfgs,
         "batch_size"=>batch_size,"metrics_interval"=>metrics_interval,"checkpoint_epochs"=>checkpoint_epochs))
@@ -43,8 +51,9 @@ function write_training_artifacts(dir, event; write_loss_csv=true)
         CSV.write(joinpath(dir,"loss.csv"),DataFrame(
           iteration=event.iterations,total=[h.total for h in r.history],
           bc=[h.bc for h in r.history],pde=[h.pde for h in r.history],supervised=[h.supervised for h in r.history],
-          weighted_pde=[h.pde*event.pde_multiplier for h in r.history],
-          weighted_supervised=[h.supervised*event.supervised_weight for h in r.history]))
+          weighted_pde=[h.pde*event.objective_weights.pde for h in r.history],
+          weighted_bc=[h.bc*event.objective_weights.ic for h in r.history],
+          weighted_supervised=[h.supervised*event.objective_weights.supervised for h in r.history]))
     end
 end
 end

@@ -112,8 +112,8 @@ function run_training(settings::TrainingSchemesSettings, maxiters::Int, mileston
       save_checkpoint(checkpoint_path, p_current, coeff_net, seed;
         representation=representation, iteration=iteration,
         extra_metadata=Dict{String,Any}(
-          "objective_components" => "pde + supervised",
-          "diagnostic_components" => "bc"
+          "objective_components" => "pde + bc + supervised",
+          "diagnostic_components" => ""
         ))
 
       error, eval_results = evaluate_solution(pinn_settings, p_current, coeff_net, st, settings.benchmark_dataset["01"], output_dir, run_id; iteration=iteration, write_results_json=false)
@@ -153,8 +153,8 @@ function run_training(settings::TrainingSchemesSettings, maxiters::Int, mileston
     save_checkpoint(final_model_path, p_trained, coeff_net, seed;
       representation=representation, iteration=final_iteration,
       extra_metadata=Dict{String,Any}(
-        "objective_components" => "pde + supervised",
-        "diagnostic_components" => "bc"
+        "objective_components" => "pde + bc + supervised",
+        "diagnostic_components" => ""
       ))
 
     # Extract metadata from eval results
@@ -193,9 +193,9 @@ function run_training(settings::TrainingSchemesSettings, maxiters::Int, mileston
           "pde" => Float64(settings.pde_weight)
         ),
         "objective" => Dict(
-          "optimized_components" => ["pde", "supervised"],
-          "diagnostic_components" => ["bc"],
-          "formula" => "pde_weight * num_supervised * pde + supervised_weight * supervised"
+          "optimized_components" => ["pde", "bc", "supervised"],
+          "diagnostic_components" => String[],
+          "formula" => "pde_multiplier * pde + ic_weight * bc + supervised_weight * supervised; pde_multiplier is pde_weight for eigenvalue and pde_weight * num_supervised for power series"
         ),
         "ode_matrix" => ode_matrix,
         "benchmark_coefficients" => benchmark_coefficients

@@ -401,8 +401,8 @@ function train_model(representation::Symbol, scope::Symbol;
     "example_exposures" => (iteration ÷ batches) * count +
                            min((iteration % batches) * BATCH_SIZE, count),
     "power_series_degree" => N,
-    "objective_components" => "pde + supervised",
-    "diagnostic_components" => "bc",
+    "objective_components" => "pde + bc + supervised",
+    "diagnostic_components" => "",
   )
 
   function save_intermediate(p, iteration, net, _st, _run_id)

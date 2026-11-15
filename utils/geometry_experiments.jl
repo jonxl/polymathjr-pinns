@@ -29,7 +29,7 @@ function ensure_contract(root, spec, cfg, nx)
         "network_hidden_width"=>cfg.neuron_count,"hidden_widths"=>cfg.model.hidden_widths,"activation"=>String(cfg.model.activation),"model_seed"=>cfg.seed,
         "adam_iterations"=>cfg.maxiters,"collocation_points"=>cfg.num_points,
         "x_left"=>cfg.x_left,"x_right"=>cfg.x_right,"solution_points"=>nx,
-        "pde_weight"=>cfg.pde_weight,"supervised_weight"=>cfg.supervised_weight,
+        "pde_weight"=>cfg.pde_weight,"ic_weight"=>cfg.loss.ic_weight,"supervised_weight"=>cfg.supervised_weight,
         "input_encoding"=>"trace_determinant","power_series_output_basis"=>"taylor_derivative",
         "plugboard_storage_basis"=>"derivative","initial_conditions"=>[1.,0.],
         "optimizer"=>"shared_gpu_adam")
@@ -151,7 +151,7 @@ function diagnostics(model, c; batch_size=1024, nx=200, tolerance=.1,
 end
 
 """Train each geometry with the shared GPU trainer, identical inputs/seeds for both heads.
-Uses the dual branch's Adam objective (PDE + supervision; IC diagnostic), not the
+Uses the dual branch's Adam objective (PDE + initial conditions + supervision), not the
 legacy scripts' Adam/LBFGS floor objective. Saves convergence evidence per model.
 """
 function run_geometry(cfg::ExperimentConfig,name::Symbol; output_root="results/geometry",
@@ -192,7 +192,7 @@ function run_geometry(cfg::ExperimentConfig,name::Symbol; output_root="results/g
             "checkpoint"=>relpath(joinpath(r.dir,"model.checkpoint"),dir))
         write_json(joinpath(dir,"results.json"),Dict("mode"=>"matched_training",
             "config"=>cfg,"metric"=>"mean per-ODE analytic solution relative L2",
-            "objective"=>"shared Adam PDE + supervised; IC diagnostic",
+            "objective"=>"shared Adam PDE + IC + supervised",
             "source_commit"=>"bb2a102a","design_sha256"=>digest,"models"=>results))
     end
     finish_panels(dir,spec,results,cfg.representation,digest)

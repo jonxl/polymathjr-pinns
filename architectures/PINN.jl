@@ -264,6 +264,22 @@ end
 # Step 6: Define the Loss Function
 # ---------------------------------------------------------------------------
 
+"""
+    objective_weights(settings) → (pde, ic, supervised)
+
+Weights of the optimised objective, the same three terms for every representation:
+
+    total = pde · PDE residual + ic · initial conditions + supervised · supervision
+
+The eigenvalue model uses the configured weights as given. The power series scales its
+PDE weight by the number of supervised coefficients, a quantity only that representation has.
+"""
+function objective_weights(settings::PINNSettings)
+  pde = settings.representation === :eigenvalue ? settings.pde_weight :
+        settings.pde_weight * settings.num_supervised
+  return (pde=Float32(pde), ic=Float32(settings.loss.ic_weight), supervised=Float32(settings.supervised_weight))
+end
+
 function loss_fn(p_net, data, coeff_net, st, ode_matrix_flat, boundary_condition, settings::PINNSettings, use_gpu::Bool=false; ode_buffers::Union{ODEBuffers, EigBuffers, Nothing}=nothing)
   # Eigenvalue representation: the network consumes (τ, Δ) and emits (μ, k, A, B),
   # and all three loss terms are analytic. Nothing below this branch applies.
@@ -280,8 +296,8 @@ function loss_fn(p_net, data, coeff_net, st, ode_matrix_flat, boundary_condition
     loss_bc = generate_loss_bc_value_eig(out, ode_buffers)
     loss_supervised = generate_loss_supervised_value_eig(out, ode_buffers)
 
-    total = loss_pde * settings.pde_weight * settings.num_supervised +
-            settings.supervised_weight * loss_supervised
+    w = objective_weights(settings)
+    total = w.pde * loss_pde + w.ic * loss_bc + w.supervised * loss_supervised
     return total, loss_bc, loss_pde, loss_supervised
   end
 
@@ -321,8 +337,8 @@ function loss_fn(p_net, data, coeff_net, st, ode_matrix_flat, boundary_condition
   # Calculate supervised loss using the plugboard coefficients
   loss_supervised = (settings.loss.coefficient_weighting === :descending ? generate_loss_supervised_variation : generate_loss_supervised_value)(loss_func_settings; ode_buffers=ode_buffers)
 
-  # Optimized objective excludes BC; BC is logged as a diagnostic.
-  return loss_pde * settings.pde_weight * settings.num_supervised + settings.supervised_weight * loss_supervised, loss_bc, loss_pde, loss_supervised
+  w = objective_weights(settings)
+  return w.pde * loss_pde + w.ic * loss_bc + w.supervised * loss_supervised, loss_bc, loss_pde, loss_supervised
 end
 
 # ---------------------------------------------------------------------------
@@ -395,8 +411,8 @@ function global_loss_batched(p_net, settings::PINNSettings, coeff_net, st, buf)
     batched_power_series_losses(out, buf; variation=settings.loss.coefficient_weighting === :descending)
   end
 
-  total = loss_pde * settings.pde_weight * settings.num_supervised +
-          loss_sup * settings.supervised_weight
+  w = objective_weights(settings)
+  total = w.pde * loss_pde + w.ic * loss_bc + w.supervised * loss_sup
 
   # Breakdown is for logging only — keep it off the AD tape
   losses = Zygote.ignore() do
@@ -458,7 +474,7 @@ We train the PINN on the training dataset and return the network
 function train_pinn(settings::PINNSettings, output_dir; run_id::String=generate_run_id(settings.optimizer), milestone_interval::Int=0, on_milestone::Union{Function,Nothing}=nothing, on_interrupt::Union{Function,Nothing}=nothing, progress_callback::Union{Function,Nothing}=nothing, write_loss_csv::Bool=true, snapshot_path::Union{String,Nothing}=nothing, batch_size::Int=0, snapshot_epoch_interval::Int=10, batch_provider::Union{Function,Nothing}=nothing, streaming_dataset_size::Int=0, metrics_interval::Int=100, on_event::Function=(_ -> nothing))
   metrics_interval > 0 || error("metrics_interval must be positive")
   batch_provider !== nothing || !isempty(settings.ode_matrices) || error("Training dataset is empty")
-  write_resolved_settings(output_dir, settings; batch_size, metrics_interval, checkpoint_epochs=snapshot_epoch_interval)
+  write_resolved_settings(output_dir, settings; weights=objective_weights(settings), batch_size, metrics_interval, checkpoint_epochs=snapshot_epoch_interval)
   emit = event -> begin
     write_training_artifacts(output_dir, event; write_loss_csv)
     on_event(event)
@@ -688,7 +704,7 @@ function train_pinn(settings::PINNSettings, output_dir; run_id::String=generate_
   result = TrainingResult(p_trained, coeff_net, st, run_id, history,
                           interrupted ? :interrupted : :completed, iter_count[])
   emit((kind=:finished, result=result, iterations=history_iters[1:n],
-        pde_multiplier=settings.pde_weight*settings.num_supervised, supervised_weight=settings.supervised_weight))
+        objective_weights=objective_weights(settings)))
   return result
 end
 
@@ -714,8 +730,8 @@ function evaluate_solution(settings::PINNSettings, p_trained, coeff_net, st, ben
     batched_eigenvalue_losses(out, buf) :
     batched_power_series_losses(out, buf; variation=settings.loss.coefficient_weighting === :descending)
 
-  loss = Float32(settings.pde_weight) * Float32(settings.num_supervised) * Float32(pde) +
-         Float32(settings.supervised_weight) * Float32(sup)
+  w = objective_weights(settings)
+  loss = w.pde * Float32(pde) + w.ic * Float32(bc) + w.supervised * Float32(sup)
 
   all_results = Dict[]
 
@@ -745,10 +761,11 @@ function evaluate_solution(settings::PINNSettings, p_trained, coeff_net, st, ben
       "learned_vs_truncated_error" => truncated === nothing ? nothing : Float64(relative_l2(U[:,idx], truncated[:,idx])),
       "objective" => Float64(loss),
       "objective_components" => Dict(
-        "optimized" => ["pde", "supervised"],
-        "pde_multiplier" => Float64(settings.pde_weight*settings.num_supervised),
-        "supervised_weight" => Float64(settings.supervised_weight),
-        "diagnostic" => ["bc"],
+        "optimized" => ["pde", "bc", "supervised"],
+        "pde_multiplier" => Float64(w.pde),
+        "ic_weight" => Float64(w.ic),
+        "supervised_weight" => Float64(w.supervised),
+        "diagnostic" => String[],
         "pde" => Float64(pde),
         "bc" => Float64(bc),
         "supervised" => Float64(sup)
@@ -783,6 +800,6 @@ end
 # Step 10: Export Functions
 # ---------------------------------------------------------------------------
 
-export PINNSettings, EpochBatchIterator, train_pinn, global_loss, global_loss_batched, evaluate_solution, initialize_network, io_dims
+export PINNSettings, EpochBatchIterator, train_pinn, global_loss, global_loss_batched, evaluate_solution, initialize_network, io_dims, objective_weights
 
 end

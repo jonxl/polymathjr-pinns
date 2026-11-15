@@ -30,15 +30,48 @@ julia --project=. -t auto scripts/generalization_variants.jl \
   --config configs/power_series_descending.toml --report
 ```
 
-Compare the three presets with the existing million-iteration study budget:
+Compare all three variants with 10,000 iterations per model:
 
 ```bash
 nohup bash scripts/shared/run_generalization_study.sh > launch.log 2>&1 < /dev/null &
 ```
 
-To use a preset through Bash, set `STUDY_CONFIG`. Its iteration budget is used
-unless an explicit third positional argument overrides it. Without a preset,
-the generalization launcher retains its 1,000,000-iteration default.
+Change the generalization study budget with `STUDY_ITERATIONS` (use a positive integer):
+
+```bash
+STUDY_ITERATIONS=19000 nohup bash scripts/shared/run_generalization_study.sh > launch.log 2>&1 < /dev/null &
+STUDY_ITERATIONS=1000000 nohup bash scripts/shared/run_generalization_study.sh > launch.log 2>&1 < /dev/null &
+```
+
+Run a degree sweep with `STUDY_DEGREES`, and several experiment jobs at once on each
+GPU with `STUDY_LANES`:
+
+```bash
+STUDY_LANES=8 STUDY_DEGREES=20,25,30,35 nohup bash scripts/shared/run_generalization_study.sh > launch.log 2>&1 < /dev/null &
+```
+
+Every experiment is trained for both power-series weightings at each degree. Results for
+degree N are saved under `jobs/degree-N/`. One degree (`STUDY_DEGREES=35`) is the ordinary
+study at that degree, with the usual flat `jobs/` layout.
+
+The eigenvalue model has no series degree, so a sweep trains it once and compares every
+degree against that one model.
+
+Every variant optimises three terms: `pde * PDE + ic_weight * IC + supervised_weight * supervision`.
+For the power series the PDE multiplier is `pde_weight * (N + 1)`; for the eigenvalue model it
+is `pde_weight` alone. Set `ic_weight = 0` in a preset to reproduce runs made before the
+initial-condition term joined the objective.
+
+The report names the degree on every power-series column, and the
+command center gains a power-series degree selector. Each lane holds a full experiment job
+in memory, so raise `STUDY_LANES` gradually. The Julia flags are `--degrees` and `--lanes`.
+
+`scripts/staged_variants.jl` is a separate, smaller run: one model per variant on a shared
+dataset, without the generalization experiments.
+
+To use a preset through Bash, set `STUDY_CONFIG`. Budget precedence is: explicit
+third positional argument, `STUDY_ITERATIONS`, preset budget, then the 10,000
+default. Presets retain their own configured budgets.
 `--variants power_series_standard,power_series_descending,eigenvalue_standard`
 selects comparison variants; the old `--reps` flag and names are accepted too.
 

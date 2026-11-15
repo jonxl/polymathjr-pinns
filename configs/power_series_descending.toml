@@ -8,6 +8,7 @@ degree = 20
 [objective]
 coefficient_weighting = "descending"
 pde_weight = 1.0
+ic_weight = 1.0
 supervised_weight = 1.0
 
 [data]

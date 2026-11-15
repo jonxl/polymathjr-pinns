@@ -5,16 +5,25 @@
 #     julia --project=. -t auto scripts/staged_variants.jl
 #
 # Flags:
-#     --specs power_series:eigenvalue        which representations to stage
+#     --specs power_series,eigenvalue        which representations to stage
+#     --degrees 20,25,30,35                   power-series degrees N
+#     --weightings uniform,descending         power-series coefficient weightings
+#     --lanes 0                               jobs at once per device (0 = automatic)
 #     --neurons 64                            hidden width
 #     --maxiters 3000                         Adam iterations per variant
 #     --n-per-region 200                       ODEs per region in shared dataset
 #     --output-root results/staged            output directory
 #     --seed 1234                             base RNG seed
 #
-# The default spec list runs four power-series variants (N=20,25,30,35) plus
-# the eigenvalue variant — five jobs total. On a five-GPU box each GPU gets
-# exactly one variant; on a smaller box they queue round-robin.
+# The default grid is every (degree, weighting) pair for the power series plus
+# one eigenvalue variant — nine jobs. Eigenvalue does not depend on the degree,
+# so adding a degree adds only power-series jobs.
+#
+# One dataset is generated for the whole run, carrying coefficients through the
+# largest degree; each variant supervises a prefix of the same rows.
+#
+# Jobs are assigned to devices round-robin, and each device trains `--lanes`
+# of them at once. Launch with enough Julia threads (-t auto) to cover the lanes.
 # =============================================================================
 
 using ArgParse
@@ -37,6 +46,18 @@ function parse_commandline()
       help = "Comma-separated representations to run (power_series, eigenvalue)"
       arg_type = String
       default = "power_series,eigenvalue"
+    "--degrees"
+      help = "Comma-separated power-series degrees N"
+      arg_type = String
+      default = "20,25,30,35"
+    "--weightings"
+      help = "Comma-separated power-series coefficient weightings (uniform, descending)"
+      arg_type = String
+      default = "uniform,descending"
+    "--lanes"
+      help = "Jobs trained at once per device; 0 picks one per Julia thread on GPU, one on CPU"
+      arg_type = Int
+      default = 0
     "--neurons"
       help = "Hidden width per variant"
       arg_type = Int
@@ -64,33 +85,26 @@ end
 parsed = parse_commandline()
 
 # ---- Spec list ----
-function build_specs(args)
-    specs = VariantSpec[]
-    wanted = Set{Symbol}(Symbol(strip(s)) for s in split(args["specs"], ",") if !isempty(s))
-    if :power_series in wanted
-        for N in (20, 25, 30, 35)
-            push!(specs, VariantSpec(string("ps_N", N), :power_series;
-                N=N, neuron_count=args["neurons"], maxiters=args["maxiters"],
-                seed_offset=N))
-        end
-    end
-    if :eigenvalue in wanted
-        push!(specs, VariantSpec("eig", :eigenvalue;
-            N=20, neuron_count=args["neurons"], maxiters=args["maxiters"],
-            seed_offset=9999))
-    end
-    return specs
-end
+symbols(text) = Symbol[Symbol(strip(t)) for t in split(text, ",") if !isempty(strip(t))]
 
-specs = build_specs(parsed)
+specs = staged_specs(
+    representations=symbols(parsed["specs"]),
+    degrees=[parse(Int, strip(t)) for t in split(parsed["degrees"], ",") if !isempty(strip(t))],
+    weightings=symbols(parsed["weightings"]),
+    neuron_count=parsed["neurons"], maxiters=parsed["maxiters"])
+num_terms = required_terms(specs)
 
-@info "Staged variant run" specs=specs output_root=parsed["output-root"] n_devices=length(device_names())
+parsed["lanes"] >= 0 || error("--lanes must be 0 (automatic) or a positive integer")
+lanes = parsed["lanes"] == 0 ? auto_lanes(length(specs)) : parsed["lanes"]
+lanes <= Threads.nthreads() || @warn "More lanes than Julia threads; jobs will share threads" lanes threads=Threads.nthreads()
+
+@info "Staged variant run" variants=[s.name for s in specs] num_terms=num_terms lanes=lanes threads=Threads.nthreads() output_root=parsed["output-root"] n_devices=length(device_names())
 
 # ---- Generate shared dataset ----
 run_context=RunManagement.create_run(Dict("launch"=>Dict(k=>v for (k,v) in parsed if v !== nothing)); output=parsed["output-root"])
 parsed["output-root"]=run_context.root
 dataset = generate_shared_dataset(n_per_region=parsed["n-per-region"],
-                                  num_terms=21,
+                                  num_terms=num_terms,
                                   seed=parsed["seed"])
 
 # ---- Build jobs + write manifest ----
@@ -98,7 +112,8 @@ jobs = build_jobs(specs, dataset, parsed["output-root"])
 manifest_path = joinpath(parsed["output-root"], "jobs.json")
 write_manifest(manifest_path, jobs, Dict(
     "n_per_region" => parsed["n-per-region"],
-    "num_terms" => 21,
+    "num_terms" => num_terms,
+    "lanes" => lanes,
     "seed" => parsed["seed"],
     "regions" => String.(Plugboard.TRACE_DET_REGIONS),
 ); n_devices=length(device_names()))
@@ -106,7 +121,7 @@ write_manifest(manifest_path, jobs, Dict(
 
 # ---- Run ----
 RunManagement.with_run_logging(run_context) do
-    run_staged_variants(jobs;run=run_context)
+    run_staged_variants(jobs; run=run_context, lanes=lanes)
 end
 
 @info "Staged variant run complete" output_root=parsed["output-root"] manifest=manifest_path
